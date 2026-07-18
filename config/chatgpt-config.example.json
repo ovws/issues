@@ -1,0 +1,4 @@
+{
+  "auth-key": "replace-with-a-long-random-upstream-key",
+  "base_url": "http://<本机内网IP>:8003"
+}
