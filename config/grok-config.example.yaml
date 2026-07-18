@@ -3,13 +3,18 @@ server:
   listen: "127.0.0.1:18001"
   swaggerEnabled: false
 frontend:
-  publicApiBaseURL: "http://127.0.0.1:18001"
+  publicApiBaseURL: "http://127.0.0.1:8001"
 database:
   driver: "sqlite"
   sqlite:
     path: "./data/backend.db"
 runtimeStore:
   driver: "memory"
+media:
+  driver: "local"
+  local:
+    path: "E:/"
 
 # Keep the remaining upstream defaults and replace all bootstrap/secrets values.
+# Generated media is archived under E:/YYYY-MM-DD/videos and E:/YYYY-MM-DD/photos.
 # The Grok admin UI must remain on loopback. The public LAN port is the gateway on 8001.

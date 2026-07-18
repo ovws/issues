@@ -76,8 +76,11 @@ $grokRoot = Join-Path $script:ProjectRoot 'upstream\grok2api'
 $grokConfig = Join-Path $grokRoot 'config.yaml'
 if (-not (Test-Path -LiteralPath $grokConfig)) {
     $content = Get-Content -Raw -Encoding UTF8 (Join-Path $grokRoot 'config.example.yaml')
-    $content.Replace('127.0.0.1:8000', '127.0.0.1:18001') |
-        Set-Content -LiteralPath $grokConfig -Encoding UTF8
+    $content = $content.Replace('listen: "127.0.0.1:8000"', 'listen: "127.0.0.1:18001"')
+    $frontendPattern = [regex]::new('(?m)^frontend:\s*$')
+    $content = $frontendPattern.Replace($content, "frontend:`r`n  publicApiBaseURL: `"http://127.0.0.1:8001`"", 1)
+    $content = $content.Replace('path: "./data/media"', 'path: "E:/"')
+    $content | Set-Content -LiteralPath $grokConfig -Encoding UTF8
     Write-Warning 'Created upstream\grok2api\config.yaml. Replace every required secret before starting.'
 }
 
