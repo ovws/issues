@@ -57,6 +57,15 @@ function Start-ManagedProcess {
         }
     }
     New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
+
+    # Some launchers provide both `Path` and `PATH`. Windows accepts that
+    # environment block, but Windows PowerShell 5.1 Start-Process rejects it
+    # as a duplicate-key dictionary. Normalize it before spawning services.
+    $processPath = [Environment]::GetEnvironmentVariable('Path', 'Process')
+    if ($processPath) {
+        [Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('Path', $processPath, 'Process')
+    }
     $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
         -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $LogDirectory "$Name.out.log") `
@@ -106,4 +115,3 @@ function Wait-TcpPort([int]$Port, [int]$TimeoutSeconds = 30) {
     }
     return $false
 }
-

@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .uv-cache/
 .uv-python/
+.tools/
 .npm-cache/
 .pnpm-store/
 .go-cache/
