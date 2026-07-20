@@ -212,7 +212,59 @@ def create_proxy_app(settings: Settings) -> FastAPI:
     ) -> Response:
         return await dispatch(request, "images/edits", key_id)
 
-    @app.post("/v1/videos", tags=["OpenAI compatible"])
+    @app.post(
+        "/v1/videos",
+        tags=["OpenAI compatible"],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["model", "image"],
+                            "properties": {
+                                "model": {
+                                    "type": "string",
+                                    "default": "grok-imagine-video-1.5",
+                                },
+                                "prompt": {"type": "string"},
+                                "duration": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 15,
+                                    "default": 5,
+                                },
+                                "aspect_ratio": {
+                                    "type": "string",
+                                    "enum": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+                                    "default": "16:9",
+                                },
+                                "resolution": {
+                                    "type": "string",
+                                    "enum": ["480p", "720p", "1080p"],
+                                    "default": "720p",
+                                },
+                                "image": {
+                                    "type": "object",
+                                    "required": ["url"],
+                                    "properties": {"url": {"type": "string", "format": "uri"}},
+                                },
+                            },
+                        },
+                        "example": {
+                            "model": "grok-imagine-video-1.5",
+                            "prompt": "让画面中的主体自然运动，镜头平滑跟随，电影感",
+                            "duration": 5,
+                            "aspect_ratio": "16:9",
+                            "resolution": "720p",
+                            "image": {"url": "https://example.com/input.jpg"},
+                        },
+                    }
+                },
+            }
+        },
+    )
     async def create_video(
         request: Request, key_id: str = Depends(require_api_key)
     ) -> Response:

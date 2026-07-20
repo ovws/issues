@@ -68,3 +68,7 @@ async def test_health_auth_and_queued_generation(monkeypatch, tmp_path):
     paths = app.openapi()["paths"]
     assert "/v1/chat/completions" in paths
     assert "/v1/images/edits" in paths
+    video_operation = paths["/v1/videos"]["post"]
+    video_schema = video_operation["requestBody"]["content"]["application/json"]["schema"]
+    assert video_schema["required"] == ["model", "image"]
+    assert video_schema["properties"]["duration"]["maximum"] == 15
