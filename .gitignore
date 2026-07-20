@@ -9,6 +9,7 @@ __pycache__/
 .pnpm-store/
 .go-cache/
 .go-mod-cache/
+.tools/
 .env
 config/*.local.*
 data/*

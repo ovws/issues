@@ -1,0 +1,49 @@
+services:
+  gemini-api:
+    build:
+      context: .
+      dockerfile: deploy/gemini/Dockerfile
+    image: internal-ai-gemini-api:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - config/gemini.local.env
+    environment:
+      INTERNAL_AI_HOST: 0.0.0.0
+      INTERNAL_AI_DB_DIR: /var/lib/internal-ai
+      INTERNAL_AI_LOG_DIR: /var/log/internal-ai
+      INTERNAL_AI_MEDIA_DIR: /var/lib/internal-ai/media
+      GEMINI_COOKIE_FILE: /run/internal-ai/gemini-cookies.json
+    ports:
+      - "8002:8002"
+    volumes:
+      - type: bind
+        source: ./config/gemini-cookies.local.json
+        target: /run/internal-ai/gemini-cookies.json
+      - gemini-data:/var/lib/internal-ai
+      - gemini-logs:/var/log/internal-ai
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8002/health',timeout=5));
+          raise SystemExit(0 if data.get('status') in {'ok','degraded'} else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  gemini-data:
+    name: internal-ai-gemini-data
+  gemini-logs:
+    name: internal-ai-gemini-logs

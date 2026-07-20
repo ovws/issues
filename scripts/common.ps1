@@ -51,12 +51,26 @@ function Start-ManagedProcess {
     $pidFile = Join-Path $script:ProjectRoot "run\$Name.pid.json"
     if (Test-Path -LiteralPath $pidFile) {
         $record = Get-Content -Raw -LiteralPath $pidFile | ConvertFrom-Json
-        if (Get-Process -Id $record.pid -ErrorAction SilentlyContinue) {
-            Write-Host "$Name is already running (PID $($record.pid))."
-            return
+        $recordedProcess = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
+        if ($recordedProcess) {
+            $actualStart = $recordedProcess.StartTime.ToUniversalTime().ToString('o')
+            if ($actualStart -eq $record.startedAt) {
+                Write-Host "$Name is already running (PID $($record.pid))."
+                return
+            }
         }
+        Remove-Item -LiteralPath $pidFile -Force
     }
     New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
+
+    # Some launchers provide both `Path` and `PATH`. Windows accepts that
+    # environment block, but Windows PowerShell 5.1 Start-Process rejects it
+    # as a duplicate-key dictionary. Normalize it before spawning services.
+    $processPath = [Environment]::GetEnvironmentVariable('Path', 'Process')
+    if ($processPath) {
+        [Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('Path', $processPath, 'Process')
+    }
     $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
         -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $LogDirectory "$Name.out.log") `
@@ -69,6 +83,32 @@ function Start-ManagedProcess {
     }
     $record | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
     Write-Host "Started $Name (PID $($process.Id))."
+}
+
+function Set-ManagedProcessListenerPid([string]$Name, [int]$Port) {
+    $pidFile = Join-Path $script:ProjectRoot "run\$Name.pid.json"
+    if (-not (Test-Path -LiteralPath $pidFile)) { throw "Missing PID file for $Name." }
+    $record = Get-Content -Raw -LiteralPath $pidFile | ConvertFrom-Json
+    $listenerPid = $null
+    foreach ($line in (& netstat.exe -ano -p tcp)) {
+        if ($line -match "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING\s+(\d+)\s*$") {
+            $listenerPid = [int]$Matches[1]
+            break
+        }
+    }
+    if (-not $listenerPid) { throw "Cannot identify the listener PID for $Name on port $Port." }
+    if ($listenerPid -eq $record.pid) { return }
+    $listener = Get-Process -Id $listenerPid -ErrorAction Stop
+    $updated = [ordered]@{
+        name = $Name
+        pid = $listenerPid
+        startedAt = $listener.StartTime.ToUniversalTime().ToString('o')
+        executable = $record.executable
+        rootPid = $record.pid
+        rootStartedAt = $record.startedAt
+        listenerPort = $Port
+    }
+    $updated | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
 }
 
 function Stop-ManagedProcess([string]$Name) {
@@ -89,6 +129,16 @@ function Stop-ManagedProcess([string]$Name) {
             throw "$Name did not stop within 15 seconds."
         }
         Write-Host "Stopped $Name."
+    }
+    if ($record.PSObject.Properties.Name -contains 'rootPid') {
+        $rootProcess = Get-Process -Id $record.rootPid -ErrorAction SilentlyContinue
+        if ($rootProcess) {
+            $rootStart = $rootProcess.StartTime.ToUniversalTime().ToString('o')
+            if ($rootStart -eq $record.rootStartedAt) {
+                Stop-Process -Id $rootProcess.Id
+                $rootProcess.WaitForExit(15000) | Out-Null
+            }
+        }
     }
     Remove-Item -LiteralPath $pidFile -Force
 }

@@ -59,6 +59,9 @@ class Settings:
     gemini_cookie_file: Path | None = None
     gemini_proxy_url: str | None = None
     gemini_default_model: str = "gemini-3-flash"
+    gemini_video_model: str = "gemini-3-pro"
+    gemini_refresh_interval: int = 600
+    upstream_failure_threshold: int = 3
 
 
 def load_settings(platform: str) -> Settings:
@@ -117,4 +120,10 @@ def load_settings(platform: str) -> Settings:
         ),
         gemini_proxy_url=_env("GEMINI_PROXY_URL", "") or None,
         gemini_default_model=_env("GEMINI_DEFAULT_MODEL", "gemini-3-flash"),
+        gemini_video_model=_env("GEMINI_VIDEO_MODEL", "gemini-3-pro"),
+        gemini_refresh_interval=_int("GEMINI_REFRESH_INTERVAL_SECONDS", 600),
+        upstream_failure_threshold=max(
+            1,
+            _int(f"{prefix}_FAILURE_THRESHOLD", 3),
+        ),
     )
