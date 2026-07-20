@@ -35,6 +35,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 明文密钥只显示一次。Gemini SQLite 只保存盐和 PBKDF2 哈希；Grok/ChatGPT 的 Key 元数据和哈希由各自上游保存。
 
+完成三套服务的本地安装和凭据配置后，服务器管理员可直接双击根目录的 `start-ai-api.bat`。脚本以 Windows 本地进程启动 Grok、Gemini、ChatGPT Image 以及仅监听本机的 8090 管理工具，不需要 Docker；它会逐项检查配置、运行环境、目录、端口和健康状态。某个平台失败时仍会继续处理其他平台，最终以非零退出码汇总失败。
+
+```powershell
+Copy-Item .\config\gemini-cookies.example.json .\config\gemini-cookies.local.json
+$env:AI_API_NO_PAUSE = '1'
+.\start-ai-api.bat
+```
+
+命令行自动化可设置 `AI_API_NO_PAUSE=1` 禁止暂停，也可传入 `-PreflightOnly` 只做检查。默认每个平台最多等待 120 秒；可用 `-StartupTimeoutSeconds 180` 调整。若 BAT 位于独立 Git worktree，脚本会自动定位包含本地 `.env` 和 `.venv` 的主工作树；也可用 `-RuntimeRoot D:\WEB2API` 或 `AI_API_RUNTIME_ROOT` 明确指定实际部署目录。若某个上游没有公开 `/health`，可仅在当前进程中通过 `AI_API_GROK_HEALTH_KEY`、`AI_API_GEMINI_HEALTH_KEY` 或 `AI_API_CHATGPT_IMAGE_HEALTH_KEY` 提供对应个人密钥，让脚本回退检查 `/v1/models`；脚本不会打印这些值。
+
+原有纯本地进程方式仍保留：
+
 ```powershell
 .\scripts\start-all.ps1
 .\scripts\status.ps1
