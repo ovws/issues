@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$currentUser = "$env:USERDOMAIN\$env:USERNAME"
 
 $directories = @(
     (Join-Path $projectRoot 'config'),
@@ -28,4 +28,3 @@ foreach ($path in $files) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to protect file: $path" }
 }
 Write-Host 'Restricted local credentials, data and logs to the current user, SYSTEM and Administrators.'
-

@@ -9,12 +9,15 @@ from internal_ai_api.maintenance import cleanup_old_files
 def test_log_redaction():
     value = (
         "Authorization: Bearer sk-internal-deadbeef.secret "
-        "Cookie=session Token=abc b64_json: " + "A" * 100
+        "Cookie=session Token=abc __Secure-1PSID=web-secret "
+        "upstream=g2a_top-secret b64_json: " + "A" * 100
     )
     result = redact(value)
     assert "secret" not in result
     assert "session" not in result
     assert "Token=abc" not in result
+    assert "web-secret" not in result
+    assert "top-secret" not in result
     assert "A" * 100 not in result
 
 

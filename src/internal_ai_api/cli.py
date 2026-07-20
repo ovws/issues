@@ -24,19 +24,38 @@ def parser() -> argparse.ArgumentParser:
     for name in ("enable", "disable"):
         command = commands.add_parser(name)
         command.add_argument("key_id")
+    rotate = commands.add_parser(
+        "rotate", help="Atomically disable a key and issue a replacement for the same owner"
+    )
+    rotate.add_argument("key_id")
+    rotate.add_argument("--expires-at", help="ISO-8601 UTC timestamp for the replacement")
     return root
 
 
 def main() -> None:
     args = parser().parse_args()
+    if args.platform != "gemini":
+        raise SystemExit(
+            "Grok/ChatGPT keys are owned by their upstream platform. "
+            "Manage them at http://127.0.0.1:8090; this CLI only manages Gemini gateway keys."
+        )
     settings = load_settings(args.platform)
-    database = Database(settings.db_path)
+    database = Database(settings.db_path, recover_unfinished=False)
     if args.command == "create":
         value = database.create_api_key(args.owner, args.department, args.expires_at)
         print(value)
         print("Store this key now. It cannot be recovered from SQLite.", file=sys.stderr)
     elif args.command == "list":
         print(json.dumps(database.list_keys(), ensure_ascii=False, indent=2))
+    elif args.command == "rotate":
+        value = database.rotate_api_key(args.key_id, args.expires_at)
+        if not value:
+            raise SystemExit(f"key not found: {args.key_id}")
+        print(value)
+        print(
+            "The old key is disabled. Store this replacement now; it cannot be recovered.",
+            file=sys.stderr,
+        )
     else:
         changed = database.set_key_enabled(args.key_id, args.command == "enable")
         if not changed:
@@ -45,4 +64,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

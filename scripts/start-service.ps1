@@ -18,7 +18,11 @@ if ($Service -eq 'grok') {
     Start-ManagedProcess -Name 'grok-upstream' -FilePath $executable `
         -Arguments @('--config', $config, '--listen', '127.0.0.1:18001') `
         -WorkingDirectory $grokRoot -LogDirectory (Join-Path $script:ProjectRoot 'logs\grok')
-    if (-not (Wait-TcpPort 18001)) { throw 'Grok upstream did not open port 18001. Check logs\grok.' }
+    # SQLite startup may need a little longer after a cold restart while the
+    # upstream backend performs WAL recovery. Keep the process alive and wait
+    # for the real listener before declaring startup failed.
+    if (-not (Wait-TcpPort 18001 90)) { throw 'Grok upstream did not open port 18001. Check logs\grok.' }
+    Set-ManagedProcessListenerPid -Name 'grok-upstream' -Port 18001
     $port = Get-Setting 'GROK_PORT' '8001'
     Start-ManagedProcess -Name 'grok-gateway' -FilePath $python `
         -Arguments @('-m', 'uvicorn', 'internal_ai_api.grok_app:app', '--host', $hostAddress, '--port', $port, '--env-file', $script:EnvFile, '--no-access-log') `
@@ -47,8 +51,11 @@ if ($Service -eq 'chatgpt-image') {
         -Arguments @('-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '18003', '--no-access-log') `
         -WorkingDirectory $chatgptRoot -LogDirectory (Join-Path $script:ProjectRoot 'logs\chatgpt-image')
     if (-not (Wait-TcpPort 18003)) { throw 'ChatGPT2API did not open port 18003. Check logs\chatgpt-image.' }
+    Set-ManagedProcessListenerPid -Name 'chatgpt-image-upstream' -Port 18003
     $port = Get-Setting 'CHATGPT_IMAGE_PORT' '8003'
     Start-ManagedProcess -Name 'chatgpt-image-gateway' -FilePath $python `
         -Arguments @('-m', 'uvicorn', 'internal_ai_api.chatgpt_image_app:app', '--host', $hostAddress, '--port', $port, '--env-file', $script:EnvFile, '--no-access-log') `
         -WorkingDirectory $script:ProjectRoot -LogDirectory (Join-Path $script:ProjectRoot 'logs\chatgpt-image')
+    if (-not (Wait-TcpPort $port)) { throw 'ChatGPT image gateway did not open its port. Check logs\chatgpt-image.' }
+    Set-ManagedProcessListenerPid -Name 'chatgpt-image-gateway' -Port $port
 }

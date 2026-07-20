@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from contextlib import asynccontextmanager, suppress
@@ -15,8 +16,13 @@ from .db import Database
 from .logging_utils import configure_logging
 from .maintenance import cleanup_loop
 from .proxy import UpstreamProxy
-from .queue import FifoQueue, QueueFullError
+from .queue import FifoQueue, QueueFullError, QueuePausedError
 from .request_ids import request_id
+from .upstream_guard import (
+    UpstreamFailureGuard,
+    UpstreamResponseError,
+    UpstreamTransportError,
+)
 
 
 def openai_error(status_code: int, message: str, error_type: str) -> JSONResponse:
@@ -37,8 +43,18 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         client = httpx.AsyncClient(timeout=None, follow_redirects=True)
         app.state.database = database
         app.state.queue = queue
+        app.state.native_key_auth = settings.platform in {"grok", "chatgpt-image"}
         app.state.proxy = UpstreamProxy(
-            settings.upstream_url or "", settings.upstream_api_key or "", client
+            settings.upstream_url or "",
+            settings.upstream_api_key or "",
+            client,
+            forward_client_authorization=app.state.native_key_auth,
+        )
+        app.state.upstream_guard = UpstreamFailureGuard(
+            settings.upstream_failure_threshold,
+            immediate_pause_statuses=(
+                frozenset() if app.state.native_key_auth else frozenset({401, 403, 429})
+            ),
         )
         await queue.start()
         cleanup_task = asyncio.create_task(
@@ -79,20 +95,31 @@ def create_proxy_app(settings: Settings) -> FastAPI:
 
     @app.get("/health", tags=["operations"])
     async def health(request: Request):
+        queue_health = request.app.state.queue.health()
         return {
-            "status": "ok",
+            "status": "paused" if queue_health["paused"] else "ok",
             "platform": settings.platform,
             "uptime_seconds": round(time.monotonic() - started_at, 3),
-            "queue": request.app.state.queue.health(),
+            "queue": queue_health,
             "jobs": request.app.state.database.counts(),
+            "operator_action_required": bool(queue_health["paused"]),
         }
 
     @app.api_route(
         "/v1/media/{media_path:path}",
-        methods=["GET", "HEAD", "PUT"],
+        methods=["GET", "HEAD"],
         include_in_schema=False,
     )
-    async def public_media(request: Request, media_path: str) -> Response:
+    async def public_media_read(request: Request, media_path: str) -> Response:
+        result = await request.app.state.proxy.forward(request, f"/v1/media/{media_path}")
+        return result.response
+
+    @app.put("/v1/media/{media_path:path}", include_in_schema=False)
+    async def authenticated_media_write(
+        request: Request,
+        media_path: str,
+        key_id: str = Depends(require_api_key),
+    ) -> Response:
         result = await request.app.state.proxy.forward(request, f"/v1/media/{media_path}")
         return result.response
 
@@ -109,6 +136,12 @@ def create_proxy_app(settings: Settings) -> FastAPI:
 
     async def dispatch(request: Request, api_path: str, key_id: str) -> Response:
         path = f"/v1/{api_path}"
+        if request.app.state.queue.health()["paused"]:
+            return openai_error(
+                503,
+                "platform generation is paused; operator action is required",
+                "queue_paused",
+            )
         if request.method == "POST" and path == "/v1/videos":
             path = "/v1/videos/generations"
         generation = request.method == "POST" and any(
@@ -121,10 +154,64 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                 "/videos",
             )
         )
+        async def forward_guarded(
+            body: bytes | None = None, *, retry_safe: bool = False
+        ):
+            retries = settings.upstream_safe_retries if retry_safe else 0
+            for attempt in range(retries + 1):
+                guard = request.app.state.upstream_guard
+                try:
+                    result = await request.app.state.proxy.forward(request, path, body)
+                except httpx.HTTPError as exc:
+                    translated = guard.transport_failure(exc)
+                    if attempt < retries:
+                        delay = settings.upstream_retry_backoff_seconds * (2**attempt)
+                        logger.warning(
+                            "upstream_safe_retry request_id=%s attempt=%s delay=%ss error=%s",
+                            request.state.request_id,
+                            attempt + 1,
+                            delay,
+                            translated,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    raise translated from exc
+                try:
+                    return guard.inspect(result)
+                except UpstreamResponseError as exc:
+                    if exc.result.response.status_code >= 500 and attempt < retries:
+                        delay = settings.upstream_retry_backoff_seconds * (2**attempt)
+                        logger.warning(
+                            "upstream_safe_retry request_id=%s attempt=%s delay=%ss error=%s",
+                            request.state.request_id,
+                            attempt + 1,
+                            delay,
+                            exc,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    raise
+            raise RuntimeError("unreachable retry state")
+
         if not generation:
             try:
-                result = await request.app.state.proxy.forward(request, path)
+                result = await forward_guarded(
+                    retry_safe=request.method in {"GET", "HEAD"}
+                )
                 return result.response
+            except UpstreamResponseError as exc:
+                if exc.pause_queue:
+                    request.app.state.queue.pause(exc.reason)
+                return exc.result.response
+            except UpstreamTransportError as exc:
+                if exc.pause_queue:
+                    request.app.state.queue.pause(exc)
+                logger.warning(
+                    "upstream_request_failed request_id=%s error=%s",
+                    request.state.request_id,
+                    exc,
+                )
+                return openai_error(502, "upstream service unavailable", "upstream_error")
             except httpx.HTTPError as exc:
                 logger.warning(
                     "upstream_request_failed request_id=%s error=%s",
@@ -144,6 +231,22 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
 
+        idempotency_key = request.headers.get("idempotency-key")
+        if idempotency_key is not None:
+            idempotency_key = idempotency_key.strip()
+            if not idempotency_key or len(idempotency_key) > 200:
+                return openai_error(
+                    400,
+                    "Idempotency-Key must contain 1 to 200 characters",
+                    "invalid_request",
+                )
+        if path == "/v1/videos/generations" and not idempotency_key:
+            return openai_error(
+                400,
+                "Idempotency-Key is required when creating a video task",
+                "idempotency_key_required",
+            )
+
         spool_path = None
         inline_body: bytes | None = body
         if len(body) > 1024 * 1024:
@@ -159,25 +262,72 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                 request_body = inline_body
                 if spool_path:
                     request_body = await asyncio.to_thread(spool_path.read_bytes)
-                return await request.app.state.proxy.forward(request, path, request_body)
+                return await forward_guarded(request_body)
             finally:
                 if spool_path:
                     spool_path.unlink(missing_ok=True)
 
         try:
-            result = await request.app.state.queue.submit(
-                endpoint=path,
-                model=model,
-                request_id=request.state.request_id,
-                key_id=key_id,
-                timeout=settings.timeouts.for_path(path),
-                operation=operation,
-            )
+            queue_kwargs = {
+                "endpoint": path,
+                "model": model,
+                "request_id": request.state.request_id,
+                "key_id": key_id,
+                "timeout": settings.timeouts.for_path(path),
+                "operation": operation,
+            }
+            if idempotency_key:
+                key_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+                job_id, future, created = request.app.state.queue.enqueue_idempotent(
+                    idempotency_key=key_hash,
+                    **queue_kwargs,
+                )
+                if not created:
+                    if spool_path:
+                        spool_path.unlink(missing_ok=True)
+                    existing = request.app.state.database.get_job(job_id)
+                    if path == "/v1/videos/generations" and existing.get(
+                        "result_location"
+                    ):
+                        response = JSONResponse(
+                            status_code=200,
+                            content={
+                                "id": existing["result_location"],
+                                "internal_job_id": job_id,
+                                "idempotent_replay": True,
+                            },
+                        )
+                    else:
+                        response = openai_error(
+                            409,
+                            "this idempotent request was already submitted",
+                            "duplicate_request",
+                        )
+                    response.headers["x-internal-job-id"] = job_id
+                    response.headers["x-idempotent-replay"] = "true"
+                    return response
+                assert future is not None
+            else:
+                job_id, future = request.app.state.queue.enqueue(**queue_kwargs)
+            result = await future
+            result.response.headers["x-internal-job-id"] = job_id
             return result.response
         except QueueFullError:
             if spool_path:
                 spool_path.unlink(missing_ok=True)
             return openai_error(429, "platform FIFO queue is full", "queue_full")
+        except QueuePausedError:
+            if spool_path:
+                spool_path.unlink(missing_ok=True)
+            return openai_error(
+                503,
+                "platform generation is paused; operator action is required",
+                "queue_paused",
+            )
+        except UpstreamResponseError as exc:
+            return exc.result.response
+        except UpstreamTransportError:
+            return openai_error(502, "upstream service unavailable", "upstream_error")
         except TimeoutError:
             return openai_error(504, "generation timed out and was not retried", "timeout")
         except httpx.HTTPError:

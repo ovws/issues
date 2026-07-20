@@ -163,7 +163,7 @@ async def queued(
     except QueuePausedError:
         if on_rejected:
             on_rejected()
-        return openai_error(429, "platform FIFO queue is paused", "queue_paused")
+        return openai_error(503, "platform FIFO queue is paused", "queue_paused")
     except TimeoutError:
         return openai_error(504, "generation timed out and was not retried", "timeout")
     except GeminiBackendError as exc:
@@ -479,7 +479,7 @@ async def create_video(
     except QueueFullError:
         return openai_error(429, "platform FIFO queue is full", "queue_full")
     except QueuePausedError:
-        return openai_error(429, "platform FIFO queue is paused", "queue_paused")
+        return openai_error(503, "platform FIFO queue is paused", "queue_paused")
 
 
 @app.get(
