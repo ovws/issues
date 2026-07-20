@@ -41,3 +41,20 @@ def test_restart_marks_unfinished_jobs_and_late_result_is_ignored(tmp_path):
     recovered = Database(path)
     assert recovered.get_job("orphan")["status"] == "interrupted"
 
+
+def test_idempotent_job_is_reused_per_key_owner(tmp_path):
+    database = Database(tmp_path / "jobs.db")
+    first, created = database.create_idempotent_job(
+        "gemini", "/v1/videos", "model", "req-1", "alice", "hash"
+    )
+    replay, replay_created = database.create_idempotent_job(
+        "gemini", "/v1/videos", "model", "req-2", "alice", "hash"
+    )
+    other_owner, other_created = database.create_idempotent_job(
+        "gemini", "/v1/videos", "model", "req-3", "bob", "hash"
+    )
+    assert created is True
+    assert replay_created is False
+    assert replay == first
+    assert other_created is True
+    assert other_owner != first

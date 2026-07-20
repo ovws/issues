@@ -6,7 +6,7 @@ import pytest
 
 from internal_ai_api.config import Timeouts
 from internal_ai_api.db import Database
-from internal_ai_api.queue import FifoQueue, QueueFullError
+from internal_ai_api.queue import FifoQueue, QueueFullError, QueuePausedError
 
 
 class Logger:
@@ -36,6 +36,31 @@ def test_video_creation_uses_generation_timeout():
     assert timeouts.for_path("/v1/videos") == 4
     assert timeouts.for_path("/v1/videos/generations") == 4
     assert timeouts.for_path("/v1/videos/task") == 5
+
+
+@pytest.mark.asyncio
+async def test_pause_exception_stops_dispatch_until_resumed(tmp_path):
+    queue = FifoQueue(Database(tmp_path / "paused.db"), "gemini", 2, Logger())
+    await queue.start()
+
+    class RateLimited(Exception):
+        pause_queue = True
+
+    async def rate_limited():
+        raise RateLimited("rate limited")
+
+    with pytest.raises(RateLimited):
+        await queue.submit(**kwargs(rate_limited))
+    assert queue.health()["paused"] is True
+
+    async def succeeds():
+        return "ok"
+
+    with pytest.raises(QueuePausedError):
+        await queue.submit(**kwargs(succeeds))
+    queue.resume()
+    assert await queue.submit(**kwargs(succeeds)) == "ok"
+    await queue.stop()
 
 
 @pytest.mark.asyncio

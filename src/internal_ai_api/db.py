@@ -71,10 +71,24 @@ class Database:
                     finished_at TEXT,
                     timed_out_at TEXT,
                     error TEXT,
-                    result_location TEXT
+                    result_location TEXT,
+                    idempotency_key TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_created
                     ON jobs(status, created_at);
+                """
+            )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "idempotency_key" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN idempotency_key TEXT")
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency
+                    ON jobs(platform, endpoint, key_id, idempotency_key)
+                 WHERE idempotency_key IS NOT NULL
                 """
             )
             connection.execute(
@@ -169,6 +183,63 @@ class Database:
             )
         return job_id
 
+    def create_idempotent_job(
+        self,
+        platform: str,
+        endpoint: str,
+        model: str | None,
+        request_id: str,
+        key_id: str,
+        idempotency_key: str,
+    ) -> tuple[str, bool]:
+        """Create a job once for a caller-supplied, already-hashed idempotency key."""
+        job_id = f"job_{uuid.uuid4().hex}"
+        with self._lock, self.connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO jobs
+                        (job_id, platform, endpoint, model, status, request_id, key_id,
+                         created_at, idempotency_key)
+                    VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        platform,
+                        endpoint,
+                        model,
+                        request_id,
+                        key_id,
+                        utcnow(),
+                        idempotency_key,
+                    ),
+                )
+                return job_id, True
+            except sqlite3.IntegrityError:
+                row = connection.execute(
+                    """
+                    SELECT job_id FROM jobs
+                     WHERE platform=? AND endpoint=? AND key_id=? AND idempotency_key=?
+                    """,
+                    (platform, endpoint, key_id, idempotency_key),
+                ).fetchone()
+                if not row:
+                    raise
+                return row["job_id"], False
+
+    def get_job_by_idempotency(
+        self, platform: str, endpoint: str, key_id: str, idempotency_key: str
+    ) -> dict | None:
+        with self._lock, self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM jobs
+                 WHERE platform=? AND endpoint=? AND key_id=? AND idempotency_key=?
+                """,
+                (platform, endpoint, key_id, idempotency_key),
+            ).fetchone()
+        return dict(row) if row else None
+
     def start_job(self, job_id: str) -> str:
         execution_id = f"exec_{uuid.uuid4().hex}"
         with self._lock, self.connect() as connection:
@@ -198,6 +269,17 @@ class Database:
                  WHERE job_id=? AND execution_id=? AND status='running'
                 """,
                 (status, utcnow(), error, result_location, job_id, execution_id),
+            )
+            return cursor.rowcount == 1
+
+    def fail_queued_job(self, job_id: str, error: str) -> bool:
+        with self._lock, self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs SET status='failed', finished_at=?, error=?
+                 WHERE job_id=? AND status='queued'
+                """,
+                (utcnow(), error[:1000], job_id),
             )
             return cursor.rowcount == 1
 
