@@ -22,6 +22,21 @@ class FakeProxy:
             result_location="result_id",
         )
 
+    async def request_json(self, method, path, payload=None):
+        request = httpx.Request(method, f"http://upstream{path}")
+        if method == "POST":
+            assert payload["image"]["url"].startswith("data:image/png;base64,")
+            return httpx.Response(
+                200,
+                request=request,
+                json={"request_id": "video_test_1234567890"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={"status": "done", "progress": 100},
+        )
+
 
 def settings(tmp_path):
     return Settings(
@@ -65,6 +80,42 @@ async def test_health_auth_and_queued_generation(monkeypatch, tmp_path):
             assert generated.status_code == 200
             assert app.state.database.counts()["succeeded"] == 1
 
+            video_ready = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": "grok-imagine-video-1.5",
+                    "messages": [{"role": "user", "content": "生成视频"}],
+                },
+            )
+            assert video_ready.status_code == 200
+            ready_content = video_ready.json()["choices"][0]["message"]["content"]
+            assert "请在当前对话中上传一张图片" in ready_content
+
+            monkeypatch.setattr(app_factory.asyncio, "sleep", _no_sleep)
+            video = await client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": "grok-imagine-video-1.5",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "让主体向前移动"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,AA=="},
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+            assert video.status_code == 200
+            content = video.json()["choices"][0]["message"]["content"]
+            assert "/v1/public/videos/video_test_1234567890/content" in content
+
     paths = app.openapi()["paths"]
     assert "/v1/chat/completions" in paths
     assert "/v1/images/edits" in paths
@@ -72,3 +123,7 @@ async def test_health_auth_and_queued_generation(monkeypatch, tmp_path):
     video_schema = video_operation["requestBody"]["content"]["application/json"]["schema"]
     assert video_schema["required"] == ["model", "image"]
     assert video_schema["properties"]["duration"]["maximum"] == 15
+
+
+async def _no_sleep(_seconds):
+    return None

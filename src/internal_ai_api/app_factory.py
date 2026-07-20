@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from contextlib import asynccontextmanager, suppress
 
@@ -14,9 +15,16 @@ from .config import Settings
 from .db import Database
 from .logging_utils import configure_logging
 from .maintenance import cleanup_loop
-from .proxy import UpstreamProxy
+from .proxy import ProxyResult, UpstreamProxy
 from .queue import FifoQueue, QueueFullError
 from .request_ids import request_id
+from .video_bridge import (
+    VIDEO_MODEL,
+    VideoChatRequest,
+    chat_response,
+    parse_video_chat_request,
+    video_payload,
+)
 
 
 def openai_error(status_code: int, message: str, error_type: str) -> JSONResponse:
@@ -186,6 +194,86 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             logger.exception("gateway_error request_id=%s error=%s", request.state.request_id, exc)
             raise HTTPException(status_code=502, detail="upstream request failed") from exc
 
+    async def video_chat_bridge(
+        request: Request, key_id: str, video_request: VideoChatRequest
+    ) -> Response:
+        if not video_request.image_url:
+            return chat_response(
+                VIDEO_MODEL,
+                "连接成功。请在当前对话中上传一张图片，再输入希望图片如何运动。",
+                stream=video_request.stream,
+                response_id="chatcmpl-video-ready",
+            )
+
+        public_base = str(request.base_url).rstrip("/")
+
+        async def operation() -> ProxyResult:
+            proxy = request.app.state.proxy
+            created = await proxy.request_json(
+                "POST", "/v1/videos/generations", video_payload(video_request)
+            )
+            if created.status_code < 200 or created.status_code >= 300:
+                return ProxyResult(
+                    Response(
+                        content=created.content,
+                        status_code=created.status_code,
+                        media_type=created.headers.get("content-type"),
+                    )
+                )
+            created_payload = created.json()
+            task_id = created_payload.get("request_id")
+            if not isinstance(task_id, str) or not task_id:
+                raise RuntimeError("video upstream did not return request_id")
+
+            while True:
+                await asyncio.sleep(2)
+                status_response = await proxy.request_json("GET", f"/v1/videos/{task_id}")
+                if status_response.status_code < 200 or status_response.status_code >= 300:
+                    raise RuntimeError("video status query failed")
+                status_payload = status_response.json()
+                state = str(status_payload.get("status", "")).lower()
+                if state in {"done", "completed", "succeeded"}:
+                    video_url = f"{public_base}/v1/public/videos/{task_id}/content"
+                    content = (
+                        "视频生成完成。\n\n"
+                        f"[点击播放或下载视频]({video_url})\n\n"
+                        f"任务编号：`{task_id}`"
+                    )
+                    return ProxyResult(
+                        chat_response(
+                            VIDEO_MODEL,
+                            content,
+                            stream=video_request.stream,
+                            response_id=f"chatcmpl-{task_id}",
+                        ),
+                        result_location=task_id,
+                    )
+                if state in {"failed", "error", "cancelled", "canceled"}:
+                    message = status_payload.get("error") or status_payload.get("error_message")
+                    raise RuntimeError(f"video generation failed: {message or state}")
+
+        try:
+            result = await request.app.state.queue.submit(
+                endpoint="/v1/videos/generations",
+                model=VIDEO_MODEL,
+                request_id=request.state.request_id,
+                key_id=key_id,
+                timeout=settings.timeouts.video,
+                operation=operation,
+            )
+            return result.response
+        except QueueFullError:
+            return openai_error(429, "platform FIFO queue is full", "queue_full")
+        except TimeoutError:
+            return openai_error(504, "video generation timed out", "timeout")
+        except Exception as exc:
+            logger.exception(
+                "video_chat_bridge_failed request_id=%s error=%s",
+                request.state.request_id,
+                exc,
+            )
+            return openai_error(502, str(exc), "video_generation_failed")
+
     @app.get("/v1/models", tags=["OpenAI compatible"])
     async def models(request: Request, key_id: str = Depends(require_api_key)) -> Response:
         return await dispatch(request, "models", key_id)
@@ -194,6 +282,10 @@ def create_proxy_app(settings: Settings) -> FastAPI:
     async def chat_completions(
         request: Request, key_id: str = Depends(require_api_key)
     ) -> Response:
+        if settings.platform == "grok":
+            video_request = parse_video_chat_request(await request.body())
+            if video_request is not None:
+                return await video_chat_bridge(request, key_id, video_request)
         return await dispatch(request, "chat/completions", key_id)
 
     @app.post("/v1/responses", tags=["OpenAI compatible"])
@@ -281,6 +373,16 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         task_id: str, request: Request, key_id: str = Depends(require_api_key)
     ) -> Response:
         return await dispatch(request, f"videos/{task_id}/content", key_id)
+
+    @app.get(
+        "/v1/public/videos/{task_id}/content",
+        tags=["OpenAI compatible"],
+        include_in_schema=False,
+    )
+    async def public_video_content(task_id: str, request: Request) -> Response:
+        if not re.fullmatch(r"video_[A-Za-z0-9_-]{10,100}", task_id):
+            raise HTTPException(status_code=404, detail="video not found")
+        return await request.app.state.proxy.stream_response(f"/v1/videos/{task_id}/content")
 
     @app.api_route(
         "/v1/{api_path:path}",
