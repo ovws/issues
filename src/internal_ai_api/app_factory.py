@@ -15,8 +15,13 @@ from .db import Database
 from .logging_utils import configure_logging
 from .maintenance import cleanup_loop
 from .proxy import UpstreamProxy
-from .queue import FifoQueue, QueueFullError
+from .queue import FifoQueue, QueueFullError, QueuePausedError
 from .request_ids import request_id
+from .upstream_guard import (
+    UpstreamFailureGuard,
+    UpstreamResponseError,
+    UpstreamTransportError,
+)
 
 
 def openai_error(status_code: int, message: str, error_type: str) -> JSONResponse:
@@ -39,6 +44,11 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         app.state.queue = queue
         app.state.proxy = UpstreamProxy(
             settings.upstream_url or "", settings.upstream_api_key or "", client
+        )
+        app.state.upstream_guard = (
+            UpstreamFailureGuard(settings.upstream_failure_threshold)
+            if settings.platform == "chatgpt-image"
+            else None
         )
         await queue.start()
         cleanup_task = asyncio.create_task(
@@ -79,12 +89,14 @@ def create_proxy_app(settings: Settings) -> FastAPI:
 
     @app.get("/health", tags=["operations"])
     async def health(request: Request):
+        queue_health = request.app.state.queue.health()
         return {
-            "status": "ok",
+            "status": "paused" if queue_health["paused"] else "ok",
             "platform": settings.platform,
             "uptime_seconds": round(time.monotonic() - started_at, 3),
-            "queue": request.app.state.queue.health(),
+            "queue": queue_health,
             "jobs": request.app.state.database.counts(),
+            "operator_action_required": bool(queue_health["paused"]),
         }
 
     @app.api_route(
@@ -109,6 +121,12 @@ def create_proxy_app(settings: Settings) -> FastAPI:
 
     async def dispatch(request: Request, api_path: str, key_id: str) -> Response:
         path = f"/v1/{api_path}"
+        if request.app.state.queue.health()["paused"]:
+            return openai_error(
+                503,
+                "platform generation is paused; operator action is required",
+                "queue_paused",
+            )
         if request.method == "POST" and path == "/v1/videos":
             path = "/v1/videos/generations"
         generation = request.method == "POST" and any(
@@ -121,10 +139,34 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                 "/videos",
             )
         )
+        async def forward_guarded(body: bytes | None = None):
+            try:
+                result = await request.app.state.proxy.forward(request, path, body)
+            except httpx.HTTPError as exc:
+                guard = request.app.state.upstream_guard
+                if guard:
+                    raise guard.transport_failure(exc) from exc
+                raise
+            guard = request.app.state.upstream_guard
+            return guard.inspect(result) if guard else result
+
         if not generation:
             try:
-                result = await request.app.state.proxy.forward(request, path)
+                result = await forward_guarded()
                 return result.response
+            except UpstreamResponseError as exc:
+                if exc.pause_queue:
+                    request.app.state.queue.pause(exc.reason)
+                return exc.result.response
+            except UpstreamTransportError as exc:
+                if exc.pause_queue:
+                    request.app.state.queue.pause(exc)
+                logger.warning(
+                    "upstream_request_failed request_id=%s error=%s",
+                    request.state.request_id,
+                    exc,
+                )
+                return openai_error(502, "upstream service unavailable", "upstream_error")
             except httpx.HTTPError as exc:
                 logger.warning(
                     "upstream_request_failed request_id=%s error=%s",
@@ -159,7 +201,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                 request_body = inline_body
                 if spool_path:
                     request_body = await asyncio.to_thread(spool_path.read_bytes)
-                return await request.app.state.proxy.forward(request, path, request_body)
+                return await forward_guarded(request_body)
             finally:
                 if spool_path:
                     spool_path.unlink(missing_ok=True)
@@ -178,6 +220,18 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             if spool_path:
                 spool_path.unlink(missing_ok=True)
             return openai_error(429, "platform FIFO queue is full", "queue_full")
+        except QueuePausedError:
+            if spool_path:
+                spool_path.unlink(missing_ok=True)
+            return openai_error(
+                503,
+                "platform generation is paused; operator action is required",
+                "queue_paused",
+            )
+        except UpstreamResponseError as exc:
+            return exc.result.response
+        except UpstreamTransportError:
+            return openai_error(502, "upstream service unavailable", "upstream_error")
         except TimeoutError:
             return openai_error(504, "generation timed out and was not retried", "timeout")
         except httpx.HTTPError:

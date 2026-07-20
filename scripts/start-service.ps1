@@ -47,8 +47,11 @@ if ($Service -eq 'chatgpt-image') {
         -Arguments @('-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '18003', '--no-access-log') `
         -WorkingDirectory $chatgptRoot -LogDirectory (Join-Path $script:ProjectRoot 'logs\chatgpt-image')
     if (-not (Wait-TcpPort 18003)) { throw 'ChatGPT2API did not open port 18003. Check logs\chatgpt-image.' }
+    Set-ManagedProcessListenerPid -Name 'chatgpt-image-upstream' -Port 18003
     $port = Get-Setting 'CHATGPT_IMAGE_PORT' '8003'
     Start-ManagedProcess -Name 'chatgpt-image-gateway' -FilePath $python `
         -Arguments @('-m', 'uvicorn', 'internal_ai_api.chatgpt_image_app:app', '--host', $hostAddress, '--port', $port, '--env-file', $script:EnvFile, '--no-access-log') `
         -WorkingDirectory $script:ProjectRoot -LogDirectory (Join-Path $script:ProjectRoot 'logs\chatgpt-image')
+    if (-not (Wait-TcpPort $port)) { throw 'ChatGPT image gateway did not open its port. Check logs\chatgpt-image.' }
+    Set-ManagedProcessListenerPid -Name 'chatgpt-image-gateway' -Port $port
 }

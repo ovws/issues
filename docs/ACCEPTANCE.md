@@ -1,5 +1,8 @@
 # WK-80 验收清单
 
+ChatGPT 图片平台的 WK-77 专属容器、熔断、接入与现场记录见
+[`CHATGPT-IMAGE.md`](CHATGPT-IMAGE.md)。
+
 ## 已由仓库自动化验证
 
 - [x] 三个平台使用独立设置、SQLite、队列、日志和启动入口。
