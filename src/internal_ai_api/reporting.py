@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from .config import load_settings
+from .db import Database
 
 
 def _duration_seconds(started_at: str | None, finished_at: str | None) -> float | None:
@@ -18,19 +18,7 @@ def _duration_seconds(started_at: str | None, finished_at: str | None) -> float 
 
 
 def build_job_report(db_path: Path, platform: str, limit: int = 100) -> dict[str, object]:
-    with sqlite3.connect(db_path) as connection:
-        connection.row_factory = sqlite3.Row
-        rows = connection.execute(
-            """
-            SELECT endpoint, status, created_at, started_at, finished_at
-              FROM jobs
-             WHERE platform=?
-             ORDER BY created_at DESC
-             LIMIT ?
-            """,
-            (platform, limit),
-        ).fetchall()
-
+    rows = Database(db_path, recover_unfinished=False).list_jobs(platform, limit)
     chronological = list(reversed(rows))
     completed = [row for row in rows if row["status"] in {"succeeded", "failed", "timed_out"}]
     succeeded = [row for row in completed if row["status"] == "succeeded"]

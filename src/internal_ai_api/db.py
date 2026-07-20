@@ -24,11 +24,11 @@ def normalize_timestamp(value: str) -> str:
 
 
 class Database:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, recover_unfinished: bool = True):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self.initialize()
+        self.initialize(recover_unfinished=recover_unfinished)
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -42,7 +42,7 @@ class Database:
         finally:
             connection.close()
 
-    def initialize(self) -> None:
+    def initialize(self, *, recover_unfinished: bool = True) -> None:
         with self._lock, self.connect() as connection:
             connection.executescript(
                 """
@@ -76,6 +76,15 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_created
                     ON jobs(status, created_at);
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id TEXT PRIMARY KEY,
+                    action TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    details TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_created
+                    ON audit_events(created_at);
                 """
             )
             columns = {
@@ -91,29 +100,37 @@ class Database:
                  WHERE idempotency_key IS NOT NULL
                 """
             )
-            connection.execute(
-                """
-                UPDATE jobs
-                   SET status='interrupted', finished_at=?,
-                       error='service restarted before completion'
-                 WHERE status IN ('queued', 'running')
-                """,
-                (utcnow(),),
-            )
+            if recover_unfinished:
+                connection.execute(
+                    """
+                    UPDATE jobs
+                       SET status='interrupted', finished_at=?,
+                           error='service restarted before completion'
+                     WHERE status IN ('queued', 'running')
+                    """,
+                    (utcnow(),),
+                )
 
     @staticmethod
     def _derive(secret: str, salt: bytes) -> bytes:
         return hashlib.pbkdf2_hmac("sha256", secret.encode(), salt, 310_000)
+
+    @classmethod
+    def _new_api_key_material(cls) -> tuple[str, str, bytes, bytes]:
+        key_id = secrets.token_hex(6)
+        secret = secrets.token_urlsafe(32)
+        salt = secrets.token_bytes(16)
+        return key_id, secret, salt, cls._derive(secret, salt)
 
     def create_api_key(
         self, owner: str, department: str | None = None, expires_at: str | None = None
     ) -> str:
         if expires_at:
             expires_at = normalize_timestamp(expires_at)
-        key_id = secrets.token_hex(6)
-        secret = secrets.token_urlsafe(32)
-        salt = secrets.token_bytes(16)
-        digest = self._derive(secret, salt)
+        owner = owner.strip()
+        if not owner:
+            raise ValueError("owner must not be empty")
+        key_id, secret, salt, digest = self._new_api_key_material()
         with self._lock, self.connect() as connection:
             connection.execute(
                 """
@@ -124,6 +141,41 @@ class Database:
                 (key_id, owner, department, salt, digest, utcnow(), expires_at),
             )
         return f"sk-internal-{key_id}.{secret}"
+
+    def rotate_api_key(self, key_id: str, expires_at: str | None = None) -> str | None:
+        """Replace one person's key atomically while preserving owner metadata."""
+        if expires_at:
+            expires_at = normalize_timestamp(expires_at)
+        new_key_id, secret, salt, digest = self._new_api_key_material()
+        with self._lock, self.connect() as connection:
+            row = connection.execute(
+                "SELECT owner, department, expires_at FROM api_keys WHERE key_id=?",
+                (key_id,),
+            ).fetchone()
+            if not row:
+                return None
+            replacement_expiry = expires_at if expires_at is not None else row["expires_at"]
+            connection.execute(
+                """
+                INSERT INTO api_keys
+                    (key_id, owner, department, salt, digest, enabled, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    new_key_id,
+                    row["owner"],
+                    row["department"],
+                    salt,
+                    digest,
+                    utcnow(),
+                    replacement_expiry,
+                ),
+            )
+            connection.execute(
+                "UPDATE api_keys SET enabled=0 WHERE key_id=?",
+                (key_id,),
+            )
+        return f"sk-internal-{new_key_id}.{secret}"
 
     def verify_api_key(self, value: str) -> str | None:
         if not value.startswith("sk-internal-") or "." not in value:
@@ -152,6 +204,19 @@ class Database:
                 "UPDATE api_keys SET enabled=? WHERE key_id=?", (int(enabled), key_id)
             )
             return cursor.rowcount == 1
+
+    def delete_disabled_api_key(self, key_id: str) -> str:
+        """Permanently delete a key only after it has been disabled."""
+        with self._lock, self.connect() as connection:
+            row = connection.execute(
+                "SELECT enabled FROM api_keys WHERE key_id=?", (key_id,)
+            ).fetchone()
+            if not row:
+                return "not_found"
+            if row["enabled"]:
+                return "enabled"
+            connection.execute("DELETE FROM api_keys WHERE key_id=?", (key_id,))
+            return "deleted"
 
     def list_keys(self) -> list[dict]:
         with self._lock, self.connect() as connection:
@@ -307,3 +372,51 @@ class Database:
         with self._lock, self.connect() as connection:
             row = connection.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
         return dict(row) if row else None
+
+    def list_jobs(self, platform: str | None = None, limit: int = 100) -> list[dict]:
+        query = "SELECT * FROM jobs"
+        parameters: tuple[object, ...]
+        if platform:
+            query += " WHERE platform=? ORDER BY created_at DESC LIMIT ?"
+            parameters = (platform, limit)
+        else:
+            query += " ORDER BY created_at DESC LIMIT ?"
+            parameters = (limit,)
+        with self._lock, self.connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_audit(
+        self, action: str, outcome: str, details: str | None = None
+    ) -> dict[str, str | None]:
+        event = {
+            "id": f"audit_{uuid.uuid4().hex}",
+            "action": action,
+            "outcome": outcome,
+            "details": details[:500] if details else None,
+            "created_at": utcnow(),
+        }
+        with self._lock, self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO audit_events(id, action, outcome, details, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                tuple(event.values()),
+            )
+            connection.execute(
+                """
+                DELETE FROM audit_events
+                 WHERE id NOT IN (
+                    SELECT id FROM audit_events ORDER BY created_at DESC LIMIT 500
+                 )
+                """
+            )
+        return event
+
+    def list_audit(self, limit: int = 50) -> list[dict]:
+        with self._lock, self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM audit_events ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]

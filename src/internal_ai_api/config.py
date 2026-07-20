@@ -21,6 +21,13 @@ def _int(name: str, default: int) -> int:
         raise ValueError(f"{name} must be an integer") from exc
 
 
+def _float(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Timeouts:
     text: int
@@ -62,6 +69,8 @@ class Settings:
     gemini_video_model: str = "gemini-3-pro"
     gemini_refresh_interval: int = 600
     upstream_failure_threshold: int = 3
+    upstream_safe_retries: int = 1
+    upstream_retry_backoff_seconds: float = 1.0
 
 
 def load_settings(platform: str) -> Settings:
@@ -125,5 +134,13 @@ def load_settings(platform: str) -> Settings:
         upstream_failure_threshold=max(
             1,
             _int(f"{prefix}_FAILURE_THRESHOLD", 3),
+        ),
+        upstream_safe_retries=min(
+            2,
+            max(0, _int(f"{prefix}_SAFE_RETRIES", 1)),
+        ),
+        upstream_retry_backoff_seconds=max(
+            0.0,
+            _float(f"{prefix}_RETRY_BACKOFF_SECONDS", 1.0),
         ),
     )

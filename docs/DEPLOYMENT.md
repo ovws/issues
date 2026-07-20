@@ -67,16 +67,14 @@ Copy-Item .\config\gemini-cookies.example.json .\config\gemini-cookies.local.jso
 ## 4. 启动与首个个人密钥
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform grok create --owner "测试用户"
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform gemini create --owner "测试用户"
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform chatgpt-image create --owner "测试用户"
-
 .\scripts\start-all.ps1
 .\scripts\status.ps1
 .\scripts\health-check.ps1
 ```
 
-每个平台密钥独立；需要授权三个平台时生成三次。明文只显示一次。
+服务器本机打开 `http://127.0.0.1:8090` 创建三把独立密钥。Grok/ChatGPT 密钥会直接写入对应
+上游原生后台，Gemini 密钥写入网关数据库；明文均只显示一次。管理台也可轮换、停用密钥并执行
+单平台启停与恢复，不能从其他公司电脑访问。
 
 ## 5. 防火墙与开机启动
 
@@ -87,7 +85,7 @@ Copy-Item .\config\gemini-cookies.example.json .\config\gemini-cookies.local.jso
 .\scripts\register-startup-task.ps1
 ```
 
-防火墙脚本只接受 RFC1918 IPv4 CIDR，只开放 TCP 8001–8003 的 Domain/Private 入站访问。18001、18003 与管理后台保持环回监听，不创建防火墙规则。
+防火墙脚本只接受 RFC1918 IPv4 CIDR，只开放 TCP 8001–8003 的 Domain/Private 入站访问。18001、18003、8090 与管理后台保持环回监听，不创建防火墙规则。
 
 ## 6. 其他电脑验证
 

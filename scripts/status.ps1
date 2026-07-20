@@ -1,6 +1,7 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 $targets = @(
+    @{ Name = 'internal-ai-admin'; Port = (Get-Setting 'INTERNAL_AI_ADMIN_PORT' '8090'); Health = "http://127.0.0.1:$(Get-Setting 'INTERNAL_AI_ADMIN_PORT' '8090')/health" },
     @{ Name = 'grok-upstream'; Port = 18001; Health = 'http://127.0.0.1:18001/healthz' },
     @{ Name = 'grok-gateway'; Port = (Get-Setting 'GROK_PORT' '8001'); Health = "http://127.0.0.1:$(Get-Setting 'GROK_PORT' '8001')/health" },
     @{ Name = 'gemini-gateway'; Port = (Get-Setting 'GEMINI_PORT' '8002'); Health = "http://127.0.0.1:$(Get-Setting 'GEMINI_PORT' '8002')/health" },
@@ -21,7 +22,12 @@ $rows = foreach ($target in $targets) {
     if ($target.Health -and $running) {
         try {
             $result = Invoke-RestMethod -Uri $target.Health -TimeoutSec 3
-            $health = if ($result.status) { $result.status } else { 'ok' }
+            $statusProperty = $result.PSObject.Properties['status']
+            $health = if ($statusProperty -and $statusProperty.Value) {
+                [string]$statusProperty.Value
+            } else {
+                'ok'
+            }
         } catch { $health = 'unreachable' }
     }
     [pscustomobject]@{
@@ -33,4 +39,3 @@ $rows = foreach ($target in $targets) {
     }
 }
 $rows | Format-Table -AutoSize
-

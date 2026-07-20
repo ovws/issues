@@ -9,6 +9,10 @@ REDACTIONS = (
     re.compile(r"(?i)(authorization|cookie|token|api[-_]?key)([\"'=:\s]+)([^\s,}\]]+)"),
     re.compile(r"sk-internal-[A-Za-z0-9._-]+"),
     re.compile(r"(?i)(b64_json[\"':\s]+)[A-Za-z0-9+/=]{64,}"),
+    re.compile(
+        r"(?i)(__Secure-(?:1PSID(?:TS|CC)?|3PSID(?:TS|CC)?))([\"'=:\s]+)([^\s,}\]]+)"
+    ),
+    re.compile(r"g2a_[A-Za-z0-9._-]+"),
 )
 
 
@@ -16,7 +20,9 @@ def redact(value: object) -> str:
     text = str(value)
     text = REDACTIONS[0].sub(r"\1\2[REDACTED]", text)
     text = REDACTIONS[1].sub("sk-internal-[REDACTED]", text)
-    return REDACTIONS[2].sub(r"\1[BASE64_REDACTED]", text)
+    text = REDACTIONS[2].sub(r"\1[BASE64_REDACTED]", text)
+    text = REDACTIONS[3].sub(r"\1\2[REDACTED]", text)
+    return REDACTIONS[4].sub("g2a_[REDACTED]", text)
 
 
 class RedactingFilter(logging.Filter):
@@ -47,4 +53,3 @@ def configure_logging(log_dir: Path, platform: str) -> logging.Logger:
     stream.addFilter(RedactingFilter())
     logger.addHandler(stream)
     return logger
-

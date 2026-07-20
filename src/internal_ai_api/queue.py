@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,6 +22,10 @@ class QueuePausedError(Exception):
 @dataclass(slots=True)
 class WorkItem:
     job_id: str
+    endpoint: str
+    model: str | None
+    request_id: str
+    key_id: str
     timeout: int
     operation: Callable[[], Awaitable[Any]]
     future: asyncio.Future[Any]
@@ -72,7 +77,9 @@ class FifoQueue:
             self.platform, endpoint, model, request_id, key_id
         )
         future = asyncio.get_running_loop().create_future()
-        self.queue.put_nowait(WorkItem(job_id, timeout, operation, future))
+        self.queue.put_nowait(
+            WorkItem(job_id, endpoint, model, request_id, key_id, timeout, operation, future)
+        )
         return job_id, future
 
     async def submit(self, **kwargs) -> Any:
@@ -110,7 +117,9 @@ class FifoQueue:
         if not created:
             return job_id, None, False
         future = asyncio.get_running_loop().create_future()
-        self.queue.put_nowait(WorkItem(job_id, timeout, operation, future))
+        self.queue.put_nowait(
+            WorkItem(job_id, endpoint, model, request_id, key_id, timeout, operation, future)
+        )
         return job_id, future, True
 
     def pause(self, reason: object) -> None:
@@ -141,10 +150,18 @@ class FifoQueue:
             self.running_job_id = item.job_id
             execution_id = self.database.start_job(item.job_id)
             operation_task: asyncio.Task | None = None
+            started = time.monotonic()
             self.logger.info(
-                "job_started job_id=%s execution_id=%s queued=%s",
+                (
+                    "job_started job_id=%s execution_id=%s request_id=%s key_id=%s "
+                    "endpoint=%s model=%s queued=%s"
+                ),
                 item.job_id,
                 execution_id,
+                item.request_id,
+                item.key_id,
+                item.endpoint,
+                item.model or "-",
                 self.queue.qsize(),
             )
             try:
@@ -159,7 +176,16 @@ class FifoQueue:
                     if not item.future.cancelled():
                         item.future.set_exception(TimeoutError("generation timed out"))
                     self.logger.warning(
-                        "job_timed_out job_id=%s timeout=%ss", item.job_id, item.timeout
+                        (
+                            "job_timed_out job_id=%s request_id=%s key_id=%s endpoint=%s "
+                            "duration_ms=%s timeout=%ss"
+                        ),
+                        item.job_id,
+                        item.request_id,
+                        item.key_id,
+                        item.endpoint,
+                        round((time.monotonic() - started) * 1000),
+                        item.timeout,
                     )
                     continue
                 result = operation_task.result()
@@ -174,7 +200,17 @@ class FifoQueue:
                     item.future.set_result(result)
                 elif not accepted and not item.future.cancelled():
                     item.future.set_exception(RuntimeError("job state was already finalized"))
-                self.logger.info("job_succeeded job_id=%s", item.job_id)
+                self.logger.info(
+                    (
+                        "job_succeeded job_id=%s request_id=%s key_id=%s endpoint=%s "
+                        "duration_ms=%s"
+                    ),
+                    item.job_id,
+                    item.request_id,
+                    item.key_id,
+                    item.endpoint,
+                    round((time.monotonic() - started) * 1000),
+                )
             except asyncio.CancelledError:
                 if operation_task and not operation_task.done():
                     operation_task.cancel()
@@ -194,7 +230,18 @@ class FifoQueue:
                 )
                 if not item.future.cancelled():
                     item.future.set_exception(exc)
-                self.logger.exception("job_failed job_id=%s error=%s", item.job_id, safe_error)
+                self.logger.exception(
+                    (
+                        "job_failed job_id=%s request_id=%s key_id=%s endpoint=%s "
+                        "duration_ms=%s error=%s"
+                    ),
+                    item.job_id,
+                    item.request_id,
+                    item.key_id,
+                    item.endpoint,
+                    round((time.monotonic() - started) * 1000),
+                    safe_error,
+                )
             finally:
                 self.running_job_id = None
                 self.queue.task_done()

@@ -57,7 +57,7 @@
 | `.env` | 上游主密钥、公开图片 origin、端口、超时和熔断阈值 |
 | `upstream/chatgpt2api/config.json` | 上游单并发、账号与图片保存策略 |
 | `upstream/chatgpt2api/data` | 上游账号、图片与 SQLite 数据 |
-| `data/chatgpt-image.db` | 个人 Key 哈希和网关任务记录 |
+| `data/chatgpt-image.db` | 个人 Key 哈希、网关任务和管理审计 |
 | `logs/chatgpt-image` | 上游、网关和脱敏业务日志 |
 
 准备脚本强制 `image_account_concurrency=1`、`image_parallel_generation=false`，关闭限流账号自动删除、
@@ -68,21 +68,9 @@
 只在部署服务器浏览器打开 `http://127.0.0.1:18003`，完成获准账号的登录/导入。不要把该
 地址映射到局域网，也不要把 `CHATGPT2API_AUTH_KEY` 发给同事。
 
-每位同事单独创建网关密钥：
-
-```powershell
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py `
-  --platform chatgpt-image create --owner "同事姓名" --department "部门"
-```
-
-数据库仅保存随机盐与 PBKDF2-SHA256 派生值；明文个人密钥只显示一次。停用离职或异常密钥：
-
-```powershell
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform chatgpt-image list
-
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py `
-  --platform chatgpt-image disable <key_id>
-```
+在服务器本机 `http://127.0.0.1:8090` 为每位同事创建 ChatGPT 图片密钥。控制台直接调用
+ChatGPT2API 的 `/api/auth/users` 原生 User Key 接口，8003 将调用者 Bearer Key 原样交给上游
+校验；明文只显示一次。停用、启用、轮换和删除也会修改同一份上游记录，不再创建无效的本地副本。
 
 ## 接口与客户端接入
 
@@ -94,7 +82,7 @@
 | POST | `/v1/chat/completions` | 只验证上游支持的图片兼容请求 |
 | POST | `/v1/responses` | 只验证上游支持的图片兼容请求 |
 
-客户端选择 `OpenAI Compatible`，填首选或备用 Base URL、个人 `sk-internal-*` 密钥，并从
+客户端选择 `OpenAI Compatible`，填首选或备用 Base URL、8090 创建的 ChatGPT2API User Key，并从
 `GET /v1/models` 选择图片模型。不要把本服务设为团队默认通用聊天 Provider。
 
 最小探测：
@@ -123,8 +111,8 @@ Invoke-RestMethod http://chatgpt-image.internal/v1/images/generations `
 所有生成、编辑、chat 和 responses POST 请求进入 ChatGPT 平台自己的单 worker FIFO。
 默认图片生成超时 15 分钟、编辑 20 分钟、文本兼容场景 5 分钟；超时不自动重试。
 
-- 上游返回 401、403 或 429：当前任务失败，平台立即进入 `paused`，等待队列被标记失败并
-  返回 503，必须通知管理员。
+- 上游返回 401、403 或 429：视为当前个人 Key 的鉴权、权限或限流结果，只失败当前任务，不暂停
+  其他用户共享的平台队列。
 - 上游连续 3 次返回 5xx 或发生传输错误：同样进入 `paused`。任意成功响应会清零连续失败
   计数。
 - `/health` 在熔断时返回 `status=paused`、`operator_action_required=true` 和脱敏原因。
