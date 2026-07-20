@@ -55,6 +55,7 @@ Invoke-RestMethod http://127.0.0.1:8002/v1/chat/completions `
 | 410 | — | 媒体已按保留期清理 | 否 |
 | 429 | `queue_full` | 本平台队列已满 | 客户端退避后人工决定 |
 | 502 | `upstream_error` | 上游不可用或登录态失效 | 不由服务自动重试 |
+| 503 | `queue_paused` | 401/403/429 或连续失败触发平台暂停 | 人工恢复后重启平台 |
 | 503 | — | Gemini 未初始化 | 恢复 Cookie 后重启 |
 | 504 | `timeout` | 执行超时并已释放 worker | 不自动重试 |
 

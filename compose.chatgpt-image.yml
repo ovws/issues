@@ -1,0 +1,102 @@
+services:
+  chatgpt2api:
+    build:
+      context: .
+      dockerfile: deploy/chatgpt-image/upstream.Dockerfile
+    image: internal-ai-chatgpt2api:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - config/chatgpt2api.local.env
+    environment:
+      STORAGE_BACKEND: sqlite
+      DATABASE_URL: sqlite:////app/data/accounts.db
+    ports:
+      - "127.0.0.1:18003:80"
+    volumes:
+      - type: bind
+        source: ./config/chatgpt-config.local.json
+        target: /app/config.json
+      - chatgpt2api-data:/app/data
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - chatgpt-image-internal
+      - chatgpt2api-egress
+    stop_grace_period: 45s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1/health?format=json',timeout=5));
+          raise SystemExit(0 if data.get('status') in {'ok','degraded'} else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  chatgpt-image-api:
+    build:
+      context: .
+      dockerfile: deploy/chatgpt-image/gateway.Dockerfile
+    image: internal-ai-chatgpt-image-api:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - config/chatgpt-image.gateway.local.env
+    environment:
+      INTERNAL_AI_HOST: 0.0.0.0
+      INTERNAL_AI_DB_DIR: /var/lib/internal-ai
+      INTERNAL_AI_LOG_DIR: /var/log/internal-ai
+      INTERNAL_AI_MEDIA_DIR: /var/lib/internal-ai/media
+      CHATGPT_IMAGE_UPSTREAM_URL: http://chatgpt2api
+    ports:
+      - "8003:8003"
+    volumes:
+      - chatgpt-image-data:/var/lib/internal-ai
+      - chatgpt-image-logs:/var/log/internal-ai
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - chatgpt-image-internal
+    depends_on:
+      chatgpt2api:
+        condition: service_healthy
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=5));
+          raise SystemExit(0 if data.get('status') == 'ok' else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  chatgpt-image-internal:
+    name: internal-ai-chatgpt-image
+    internal: true
+  chatgpt2api-egress:
+    name: internal-ai-chatgpt2api-egress
+
+volumes:
+  chatgpt2api-data:
+    name: internal-ai-chatgpt2api-data
+  chatgpt-image-data:
+    name: internal-ai-chatgpt-image-data
+  chatgpt-image-logs:
+    name: internal-ai-chatgpt-image-logs
