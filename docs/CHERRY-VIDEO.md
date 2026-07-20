@@ -1,6 +1,6 @@
 # Cherry Studio 使用 Grok 视频
 
-本项目在 Grok 网关的 OpenAI `chat/completions` 接口上提供视频兼容桥接。普通同事不需要调用 Swagger、编写脚本或手动轮询视频任务。
+本项目在 Grok 网关的 OpenAI `chat/completions` 和 `responses` 接口上提供视频兼容桥接。普通同事不需要调用 Swagger、编写脚本或手动轮询视频任务。Cherry Studio 当前使用的 `/v1/responses` 流式请求已适配。
 
 ## 服务商配置
 
@@ -34,4 +34,3 @@ API Key：管理员分配的个人 sk-internal-... 密钥
 默认参数为 5 秒、720p、16:9。当前 `grok-imagine-video-1.5` 必须提供首图，不支持纯文字生成视频。
 
 生成请求仍需个人 API Key，并进入 Grok 独立 FIFO 队列。完成链接使用不可猜测的任务 ID，拿到链接的人可以直接访问成品，因此不要把链接转发给无关人员。
-

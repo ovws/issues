@@ -92,6 +92,37 @@ async def test_health_auth_and_queued_generation(monkeypatch, tmp_path):
             ready_content = video_ready.json()["choices"][0]["message"]["content"]
             assert "请在当前对话中上传一张图片" in ready_content
 
+            responses_ready = await client.post(
+                "/v1/responses",
+                headers=headers,
+                json={
+                    "model": "grok-imagine-video-1.5",
+                    "input": [{"role": "user", "content": "生成视频"}],
+                },
+            )
+            assert responses_ready.status_code == 200
+            ready_payload = responses_ready.json()
+            assert ready_payload["object"] == "response"
+            assert ready_payload["status"] == "completed"
+            assert "请在当前对话中上传一张图片" in ready_payload["output"][0]["content"][0][
+                "text"
+            ]
+
+            responses_stream = await client.post(
+                "/v1/responses",
+                headers=headers,
+                json={
+                    "model": "grok-imagine-video-1.5",
+                    "input": "生成视频",
+                    "stream": True,
+                },
+            )
+            assert responses_stream.status_code == 200
+            assert responses_stream.headers["content-type"].startswith("text/event-stream")
+            assert "event: response.output_text.delta" in responses_stream.text
+            assert "event: response.completed" in responses_stream.text
+            assert "[DONE]" not in responses_stream.text
+
             monkeypatch.setattr(app_factory.asyncio, "sleep", _no_sleep)
             video = await client.post(
                 "/v1/chat/completions",
@@ -114,6 +145,31 @@ async def test_health_auth_and_queued_generation(monkeypatch, tmp_path):
             )
             assert video.status_code == 200
             content = video.json()["choices"][0]["message"]["content"]
+            assert "/v1/public/videos/video_test_1234567890/content" in content
+
+            responses_video = await client.post(
+                "/v1/responses",
+                headers=headers,
+                json={
+                    "model": "grok-imagine-video-1.5",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": "让主体向前移动"},
+                                {
+                                    "type": "input_image",
+                                    "image_url": "data:image/png;base64,AA==",
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+            assert responses_video.status_code == 200
+            responses_payload = responses_video.json()
+            assert responses_payload["id"] == "resp_video_test_1234567890"
+            content = responses_payload["output"][0]["content"][0]["text"]
             assert "/v1/public/videos/video_test_1234567890/content" in content
 
     paths = app.openapi()["paths"]

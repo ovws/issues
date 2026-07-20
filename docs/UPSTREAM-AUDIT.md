@@ -1,10 +1,10 @@
 # 上游核对记录
 
-核对日期：2026-07-18。检出均位于项目内 `upstream` 目录。
+核对日期：2026-07-20。检出均位于项目内 `upstream` 目录。
 
 | 项目 | Commit | Commit 时间 | 实际运行环境 | 许可证 |
 | --- | --- | --- | --- | --- |
-| chenyme/grok2api | `2c1582860cf844419b917656e8e2d7afc5add6c5` | 2026-07-18 17:16 +08:00 | Go 1.26 + React 19 管理端 | MIT |
+| chenyme/grok2api | `d74b15396686ae68b88c5a52e4e538d058c41d98` (`v3.0.5`) | 2026-07-20 | Go 1.26 + React 19 管理端 | MIT |
 | HanaokaYuzu/Gemini-API | `fbe0790599ac8ee77692dabdce88a96110a33294` | 2026-04-13 10:50 -05:00 | Python 3.10+ SDK | AGPL-3.0 |
 | basketikun/chatgpt2api | `1f96b49b2bf35e607a2c587e3fb9d40c5acb475d` | 2026-07-05 12:04 +08:00 | Python 3.13 + 可选前端 | MIT + README 使用限制 |
 

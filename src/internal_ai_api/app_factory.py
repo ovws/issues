@@ -21,9 +21,10 @@ from .request_ids import request_id
 from .video_bridge import (
     VIDEO_MODEL,
     VideoChatRequest,
-    chat_response,
     parse_video_chat_request,
+    parse_video_responses_request,
     video_payload,
+    video_response,
 )
 
 
@@ -194,15 +195,18 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             logger.exception("gateway_error request_id=%s error=%s", request.state.request_id, exc)
             raise HTTPException(status_code=502, detail="upstream request failed") from exc
 
-    async def video_chat_bridge(
+    async def video_client_bridge(
         request: Request, key_id: str, video_request: VideoChatRequest
     ) -> Response:
         if not video_request.image_url:
-            return chat_response(
-                VIDEO_MODEL,
+            return video_response(
+                video_request,
                 "连接成功。请在当前对话中上传一张图片，再输入希望图片如何运动。",
-                stream=video_request.stream,
-                response_id="chatcmpl-video-ready",
+                response_id=(
+                    "resp_video_ready"
+                    if video_request.api_style == "responses"
+                    else "chatcmpl-video-ready"
+                ),
             )
 
         public_base = str(request.base_url).rstrip("/")
@@ -240,11 +244,14 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                         f"任务编号：`{task_id}`"
                     )
                     return ProxyResult(
-                        chat_response(
-                            VIDEO_MODEL,
+                        video_response(
+                            video_request,
                             content,
-                            stream=video_request.stream,
-                            response_id=f"chatcmpl-{task_id}",
+                            response_id=(
+                                f"resp_{task_id}"
+                                if video_request.api_style == "responses"
+                                else f"chatcmpl-{task_id}"
+                            ),
                         ),
                         result_location=task_id,
                     )
@@ -268,7 +275,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             return openai_error(504, "video generation timed out", "timeout")
         except Exception as exc:
             logger.exception(
-                "video_chat_bridge_failed request_id=%s error=%s",
+                "video_client_bridge_failed request_id=%s error=%s",
                 request.state.request_id,
                 exc,
             )
@@ -285,11 +292,15 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         if settings.platform == "grok":
             video_request = parse_video_chat_request(await request.body())
             if video_request is not None:
-                return await video_chat_bridge(request, key_id, video_request)
+                return await video_client_bridge(request, key_id, video_request)
         return await dispatch(request, "chat/completions", key_id)
 
     @app.post("/v1/responses", tags=["OpenAI compatible"])
     async def responses(request: Request, key_id: str = Depends(require_api_key)) -> Response:
+        if settings.platform == "grok":
+            video_request = parse_video_responses_request(await request.body())
+            if video_request is not None:
+                return await video_client_bridge(request, key_id, video_request)
         return await dispatch(request, "responses", key_id)
 
     @app.post("/v1/images/generations", tags=["OpenAI compatible"])
