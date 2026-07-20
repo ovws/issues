@@ -71,9 +71,12 @@ $gh = 'C:\Program Files\GitHub CLI\gh.exe'
 ## GitHub Issue and Linear synchronization
 
 - GitHub is the code-facing record; Linear is the planning-facing record. Keep the same title, scope, priority, and current status aligned.
+- This repository's GitHub integration automatically creates a Linear issue for a newly created GitHub Issue. If an active Linear issue already exists, do not blindly create a GitHub Issue for the same work: that creates a duplicate Linear issue. Prefer linking the branch and PR to the existing Linear issue. Create the GitHub Issue only when the user explicitly requires it, then immediately mark the integration-created Linear issue as a duplicate of the original.
+- If work starts from GitHub and no Linear issue exists, let the integration create the Linear issue; do not manually create a second Linear issue.
 - Every implementation Issue/PR must mention its Linear identifier (`WK-…`) and link to the Linear issue.
 - Every Linear issue must receive links to its GitHub Issue, branch, commits, and PR through Linear attachments or a concise progress comment.
 - When a GitHub Issue already exists, update it rather than creating a duplicate. When a Linear issue already contains the GitHub attachment, do not add the same attachment again.
+- Read the Linear issue before every update and verify it immediately afterward. When adding links through the Linear API, pass the current state explicitly if the tool may apply defaults; if the state changes unexpectedly, restore it before continuing.
 - Sync meaningful state changes: work started, branch pushed, Draft PR opened, validation result, blocker, Ready for review, merged, and verified completion.
 - Do not mark an Issue complete merely because code was pushed. Record unverified external dependencies such as missing accounts, credentials, DNS, firewall, or real-client end-to-end validation as remaining work.
 - Do not copy secrets, cookies, authorization headers, private image contents, or raw Base64 payloads between GitHub and Linear.
