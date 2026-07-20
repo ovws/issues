@@ -37,6 +37,10 @@ class FakeProxy:
             json={"status": "done", "progress": 100},
         )
 
+    async def stream_response(self, path):
+        assert path == "/v1/videos/video_test_1234567890/content"
+        return Response(b"test-video", media_type="video/mp4")
+
 
 def settings(tmp_path):
     return Settings(
@@ -171,6 +175,22 @@ async def test_health_auth_and_queued_generation(monkeypatch, tmp_path):
             assert responses_payload["id"] == "resp_video_test_1234567890"
             content = responses_payload["output"][0]["content"][0]["text"]
             assert "/v1/public/videos/video_test_1234567890/content" in content
+
+            standard_video_content = await client.get(
+                "/v1/videos/video_test_1234567890/content"
+            )
+            assert standard_video_content.status_code == 200
+            assert standard_video_content.headers["content-type"] == "video/mp4"
+            assert standard_video_content.content == b"test-video"
+
+            public_video_content = await client.get(
+                "/v1/public/videos/video_test_1234567890/content"
+            )
+            assert public_video_content.status_code == 200
+            assert public_video_content.content == b"test-video"
+
+            invalid_video_content = await client.get("/v1/videos/not-a-video/content")
+            assert invalid_video_content.status_code == 404
 
     paths = app.openapi()["paths"]
     assert "/v1/chat/completions" in paths

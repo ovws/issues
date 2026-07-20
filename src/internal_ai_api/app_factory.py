@@ -379,11 +379,17 @@ def create_proxy_app(settings: Settings) -> FastAPI:
     ) -> Response:
         return await dispatch(request, f"videos/{task_id}", key_id)
 
-    @app.get("/v1/videos/{task_id}/content", tags=["OpenAI compatible"])
+    @app.get(
+        "/v1/videos/{task_id}/content",
+        tags=["OpenAI compatible"],
+        include_in_schema=False,
+    )
     async def get_video_content(
-        task_id: str, request: Request, key_id: str = Depends(require_api_key)
+        task_id: str, request: Request
     ) -> Response:
-        return await dispatch(request, f"videos/{task_id}/content", key_id)
+        if not re.fullmatch(r"video_[A-Za-z0-9_-]{10,100}", task_id):
+            raise HTTPException(status_code=404, detail="video not found")
+        return await request.app.state.proxy.stream_response(f"/v1/videos/{task_id}/content")
 
     @app.get(
         "/v1/public/videos/{task_id}/content",
