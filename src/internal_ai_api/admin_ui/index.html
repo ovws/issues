@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Internal AI Control</title>
+    <meta name="description" content="Grok、Gemini 与 ChatGPT 图片内网运行控制台">
+    <link rel="stylesheet" href="/assets/admin.css">
+    <script src="/assets/admin.js" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">IA</span>
+          <span><strong>Internal AI</strong><small>CONTROL PLANE</small></span>
+        </div>
+        <nav>
+          <a class="nav-item active" href="#overview"><span>01</span>运行总览</a>
+          <a class="nav-item" href="#platforms"><span>02</span>平台控制</a>
+          <a class="nav-item" href="#keys"><span>03</span>访问密钥</a>
+          <a class="nav-item" href="#activity"><span>04</span>任务与审计</a>
+        </nav>
+        <div class="local-badge">
+          <span class="pulse"></span>
+          <div><strong>仅本机访问</strong><small>127.0.0.1 · ISOLATED SQLITE</small></div>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar" id="overview">
+          <div>
+            <p class="eyebrow">WK-78 · 统一鉴权与运行风控</p>
+            <h1>三平台运行中枢</h1>
+            <p class="subtitle">一处查看隔离状态、队列、个人密钥与故障处置。</p>
+          </div>
+          <div class="top-actions">
+            <span id="updatedAt" class="updated">正在连接本机服务…</span>
+            <button class="button ghost" id="refreshButton" type="button">刷新状态</button>
+            <button class="button primary" id="newKeyButton" type="button">新建个人密钥</button>
+          </div>
+        </header>
+
+        <section class="summary-grid" aria-label="运行摘要">
+          <article><span>在线平台</span><strong id="onlineCount">—</strong><small>/ 3</small></article>
+          <article><span>待人工处理</span><strong id="pausedCount">—</strong><small>个平台</small></article>
+          <article><span>有效个人密钥</span><strong id="keyCount">—</strong><small>把</small></article>
+          <article><span>队列等待</span><strong id="queuedCount">—</strong><small>个任务</small></article>
+        </section>
+
+        <section id="platforms" class="section-block">
+          <div class="section-heading">
+            <div><p class="eyebrow">ISOLATED RUNTIMES</p><h2>平台控制</h2></div>
+            <p>每个平台独立启停、独立熔断；一个平台异常不会拖停另外两个。</p>
+          </div>
+          <div id="platformGrid" class="platform-grid" aria-live="polite"></div>
+        </section>
+
+        <section id="keys" class="section-block keys-panel">
+          <div class="section-heading compact">
+            <div><p class="eyebrow">ACCESS CONTROL</p><h2>个人 API Key</h2></div>
+            <p>Grok 与 ChatGPT 密钥直接写入各自上游原生后台，8001/8003 原样转交并由上游鉴权；Gemini 没有原生 Key 系统，8002 密钥由本控制台网关管理。明文只显示一次。</p>
+          </div>
+          <div class="tabs" role="tablist" aria-label="选择平台">
+            <button class="tab active" type="button" data-key-platform="grok">Grok</button>
+            <button class="tab" type="button" data-key-platform="gemini">Gemini</button>
+            <button class="tab" type="button" data-key-platform="chatgpt-image">ChatGPT 图片</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>使用人</th><th>部门</th><th>Key ID</th><th>状态</th><th>最后使用</th><th><span class="sr-only">操作</span></th></tr></thead>
+              <tbody id="keyRows"><tr><td colspan="6" class="empty">正在读取密钥元数据…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="activity" class="activity-grid">
+          <article class="feed-panel">
+            <div class="panel-title"><div><p class="eyebrow">RECENT JOBS</p><h2>最近任务</h2></div><span>不保存请求正文</span></div>
+            <div id="jobFeed" class="feed"></div>
+          </article>
+          <article class="feed-panel">
+            <div class="panel-title"><div><p class="eyebrow">AUDIT TRAIL</p><h2>管理审计</h2></div><span>最多保留 500 条</span></div>
+            <div id="auditFeed" class="feed"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="keyDialog">
+      <form id="keyForm" method="dialog">
+        <div class="dialog-head"><div><p class="eyebrow">PERSONAL ACCESS</p><h2>新建个人密钥</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
+        <label>平台<select name="platform" required><option value="grok">Grok</option><option value="gemini">Gemini</option><option value="chatgpt-image">ChatGPT 图片</option></select></label>
+        <label>使用人<input name="owner" maxlength="100" required autocomplete="off" placeholder="例如：张三"></label>
+        <label>部门<input name="department" maxlength="100" autocomplete="off" placeholder="例如：设计部"></label>
+          <label>到期时间（可选）<input name="expires_at" type="datetime-local"></label>
+          <p class="form-note">Grok 支持原生到期时间；ChatGPT2API 原生 User Key 暂不支持到期时间；Gemini 由网关执行到期控制。请通过公司批准的密码管理工具交付密钥。</p>
+        <div class="dialog-actions"><button class="button ghost" value="cancel">取消</button><button class="button primary" id="createKeySubmit" value="default">创建密钥</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="secretDialog">
+      <div class="dialog-head"><div><p class="eyebrow">SHOW ONCE</p><h2>立即保存这把密钥</h2></div></div>
+      <p class="warning">关闭后无法从 JSON 恢复明文。若丢失，请直接轮换。</p>
+      <p class="form-note" id="secretVerification" role="status"></p>
+      <code id="secretValue"></code>
+      <div class="dialog-actions"><button class="button ghost" id="copySecretButton" type="button">复制</button><button class="button primary" id="closeSecretButton" type="button">我已安全保存</button></div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

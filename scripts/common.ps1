@@ -63,6 +63,13 @@ function Start-ManagedProcess {
     }
     New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 
+    # Use a fresh pair of redirect files for every launch. Start-Process keeps
+    # these files open for the lifetime of the child, and a crashed launcher or
+    # inherited handle can leave a fixed log path inaccessible on Windows.
+    $launchStamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
+    $stdoutLog = Join-Path $LogDirectory "$Name.$launchStamp.out.log"
+    $stderrLog = Join-Path $LogDirectory "$Name.$launchStamp.err.log"
+
     # Some launchers provide both `Path` and `PATH`. Windows accepts that
     # environment block, but Windows PowerShell 5.1 Start-Process rejects it
     # as a duplicate-key dictionary. Normalize it before spawning services.
@@ -73,13 +80,15 @@ function Start-ManagedProcess {
     }
     $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
         -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $LogDirectory "$Name.out.log") `
-        -RedirectStandardError (Join-Path $LogDirectory "$Name.err.log")
+        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog
     $record = [ordered]@{
         name = $Name
         pid = $process.Id
         startedAt = $process.StartTime.ToUniversalTime().ToString('o')
         executable = $FilePath
+        stdoutLog = $stdoutLog
+        stderrLog = $stderrLog
     }
     $record | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
     Write-Host "Started $Name (PID $($process.Id))."
@@ -107,6 +116,12 @@ function Set-ManagedProcessListenerPid([string]$Name, [int]$Port) {
         rootPid = $record.pid
         rootStartedAt = $record.startedAt
         listenerPort = $Port
+    }
+    if ($record.PSObject.Properties.Name -contains 'stdoutLog') {
+        $updated['stdoutLog'] = $record.stdoutLog
+    }
+    if ($record.PSObject.Properties.Name -contains 'stderrLog') {
+        $updated['stderrLog'] = $record.stderrLog
     }
     $updated | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
 }

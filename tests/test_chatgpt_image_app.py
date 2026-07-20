@@ -21,7 +21,7 @@ class ScriptedProxy:
     responses: deque[int] = deque()
     calls: list[dict[str, object]] = []
 
-    def __init__(self, base_url, api_key, client):
+    def __init__(self, base_url, api_key, client, **kwargs):
         self.api_key = api_key
 
     async def forward(self, request, path, body=None):
@@ -143,7 +143,7 @@ async def test_required_compatibility_routes(method, path, client):
 
 
 @pytest.mark.asyncio
-async def test_auth_or_rate_limit_response_pauses_only_the_chatgpt_queue(client):
+async def test_client_rate_limit_response_does_not_pause_the_chatgpt_queue(client):
     app, session, headers = client
     ScriptedProxy.responses.append(429)
     blocked = await session.post(
@@ -154,18 +154,17 @@ async def test_auth_or_rate_limit_response_pauses_only_the_chatgpt_queue(client)
     assert blocked.status_code == 429
 
     health = (await session.get("/health")).json()
-    assert health["status"] == "paused"
-    assert health["operator_action_required"] is True
-    assert health["queue"]["paused"] is True
+    assert health["status"] == "ok"
+    assert health["operator_action_required"] is False
+    assert health["queue"]["paused"] is False
 
     stopped = await session.post(
         "/v1/images/generations",
         headers=headers,
         json={"model": "gpt-image-2", "prompt": "must not reach upstream"},
     )
-    assert stopped.status_code == 503
-    assert stopped.json()["error"]["type"] == "queue_paused"
-    assert len(ScriptedProxy.calls) == 1
+    assert stopped.status_code == 200
+    assert len(ScriptedProxy.calls) == 2
     assert app.state.database.counts()["failed"] == 1
 
 
@@ -254,3 +253,36 @@ async def test_proxy_replaces_personal_key_with_upstream_master_key():
     assert json.loads(response.response.body)["data"][0]["b64_json"] == "aW1hZ2U="
     assert captured["authorization"] == "Bearer master-only"
     assert captured["body"] == b'{"prompt":"test"}'
+
+
+@pytest.mark.asyncio
+async def test_proxy_forwards_native_platform_key_when_authenticated():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["authorization"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": []})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    proxy = UpstreamProxy(
+        "http://chatgpt2api",
+        "admin-key",
+        client,
+        forward_client_authorization=True,
+    )
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/v1/models",
+        "query_string": b"",
+        "headers": [(b"authorization", b"Bearer native-user-key")],
+    }
+    request = Request(scope)
+    request.state.forward_native_authorization = True
+    try:
+        response = await proxy.forward(request, "/v1/models", b"")
+    finally:
+        await client.aclose()
+
+    assert response.response.status_code == 200
+    assert captured["authorization"] == "Bearer native-user-key"

@@ -14,6 +14,5 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings `
-    -Description 'Start project-local Grok, Gemini and ChatGPT image API services.' -Force | Out-Null
+    -Description 'Start the loopback admin console and isolated Grok, Gemini and ChatGPT image API services.' -Force | Out-Null
 Write-Host "Registered scheduled task: $TaskName"
-

@@ -8,7 +8,7 @@
 | Gemini | `http://<内网IP>:8002/v1` | 本进程内 `Gemini-API` SDK | 文本、图片、编辑、视频 |
 | ChatGPT 图片 | `http://<内网IP>:8003/v1` | `127.0.0.1:18003` | 图片生成、多图编辑、有限文本场景 |
 
-上游管理页面与凭据只在本机环回地址上可用。局域网端口由本项目网关占用，统一实施个人 API Key、每平台 FIFO 单并发队列、SQLite 任务状态、超时保护和日志脱敏。
+上游管理页面与凭据只在本机环回地址上可用。局域网端口由本项目网关占用，统一实施每平台 FIFO 单并发队列、独立 SQLite 任务状态、超时保护和日志脱敏。本机管理台位于 `http://127.0.0.1:8090`：Grok/ChatGPT 密钥直接写入上游原生后台并由上游鉴权，Gemini 因没有原生 Key 系统而使用网关密钥。
 
 部署脚本默认从 `ovws/internal-ai-grok2api`、`ovws/internal-ai-gemini-api`、`ovws/internal-ai-chatgpt2api` 三个私有镜像拉取固定 commit；原始开源上游地址保留在 `config/upstreams.json` 的 `upstream` 字段中用于审计。
 
@@ -27,15 +27,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 2. 将 `config/gemini-cookies.example.json` 复制为 `config/gemini-cookies.local.json`，只在本机填写 Gemini Cookie。
 3. 编辑 `upstream/grok2api/config.yaml`，替换所有标记为“必须修改”的管理员和加密密钥。
 4. 分别在 Grok、ChatGPT2API 本地管理端导入获准使用的账号凭据。
-5. 为同事生成各平台独立密钥：
+5. 启动服务，在服务器本机打开 `http://127.0.0.1:8090`，为同事生成各平台独立密钥。Grok 和 ChatGPT 会写入真实上游；Gemini 写入网关数据库。CLI 仅保留给 Gemini 应急管理：
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform grok create --owner "张三" --department "设计部"
 .\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform gemini create --owner "张三" --department "设计部"
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform chatgpt-image create --owner "张三" --department "设计部"
 ```
 
-明文密钥只显示一次，SQLite 只保存盐和 PBKDF2 哈希。
+明文密钥只显示一次。Gemini SQLite 只保存盐和 PBKDF2 哈希；Grok/ChatGPT 的 Key 元数据和哈希由各自上游保存。
+
+完成三套服务的本地安装和凭据配置后，服务器管理员可直接双击根目录的 `start-ai-api.bat`。脚本以 Windows 本地进程启动 Grok、Gemini、ChatGPT Image 以及仅监听本机的 8090 管理工具，不需要 Docker；它会逐项检查配置、运行环境、目录、端口和健康状态。某个平台失败时仍会继续处理其他平台，最终以非零退出码汇总失败。
+
+```powershell
+Copy-Item .\config\gemini-cookies.example.json .\config\gemini-cookies.local.json
+$env:AI_API_NO_PAUSE = '1'
+.\start-ai-api.bat
+```
+
+命令行自动化可设置 `AI_API_NO_PAUSE=1` 禁止暂停，也可传入 `-PreflightOnly` 只做检查。默认每个平台最多等待 120 秒；可用 `-StartupTimeoutSeconds 180` 调整。若 BAT 位于独立 Git worktree，脚本会自动定位包含本地 `.env` 和 `.venv` 的主工作树；也可用 `-RuntimeRoot D:\WEB2API` 或 `AI_API_RUNTIME_ROOT` 明确指定实际部署目录。若某个上游没有公开 `/health`，可仅在当前进程中通过 `AI_API_GROK_HEALTH_KEY`、`AI_API_GEMINI_HEALTH_KEY` 或 `AI_API_CHATGPT_IMAGE_HEALTH_KEY` 提供对应个人密钥，让脚本回退检查 `/v1/models`；脚本不会打印这些值。
+
+原有纯本地进程方式仍保留：
 
 ```powershell
 .\scripts\start-all.ps1
@@ -56,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```text
 Provider: OpenAI Compatible
 Base URL: http://<本机内网IP>:8001/v1
-API Key: sk-internal-...
+API Key: <从 8090 为该平台创建的个人密钥>
 Model: 通过 GET /v1/models 获取
 ```
 
@@ -84,4 +94,4 @@ upstream/               三个独立上游 Git 仓库（根项目忽略）
 - 上游均属于非官方网页接口实现，可能随登录态、网页接口或服务条款变化失效。
 - ChatGPT2API 当前 README 明确限制商业、批量、盈利和规模化用途。公司内部使用前必须由法务/信息安全确认许可和 OpenAI 服务条款；未确认前不得上线。
 
-详见 [部署说明](docs/DEPLOYMENT.md)、[API 与错误码](docs/API.md)、[运维恢复](docs/OPERATIONS.md)、[安全与上游风险](docs/SECURITY.md) 和 [现场验收清单](docs/ACCEPTANCE.md)。
+详见 [部署说明](docs/DEPLOYMENT.md)、[三平台本机管理台](docs/ADMIN-CONSOLE.md)、[API 与错误码](docs/API.md)、[运维恢复](docs/OPERATIONS.md)、[安全与上游风险](docs/SECURITY.md) 和 [现场验收清单](docs/ACCEPTANCE.md)。
