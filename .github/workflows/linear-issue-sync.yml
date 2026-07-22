@@ -1,0 +1,165 @@
+name: Sync Linear issue status to GitHub
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Synchronize opted-in issues
+        uses: actions/github-script@v7
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          script: |
+            const syncLabel = 'linear-sync';
+            const reviewLabel = 'needs-review';
+            const markerPrefix = '<!-- linear-github-sync:';
+
+            if (!process.env.LINEAR_API_KEY) {
+              core.setFailed('Missing required repository secret: LINEAR_API_KEY');
+              return;
+            }
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color,
+                    description,
+                  });
+                } catch (createError) {
+                  // A concurrent run or a maintainer may have created it first.
+                  if (createError.status !== 422) throw createError;
+                }
+              }
+            }
+
+            async function linearIssue(identifier) {
+              const response = await fetch('https://api.linear.app/graphql', {
+                method: 'POST',
+                headers: {
+                  Authorization: process.env.LINEAR_API_KEY,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  query: `query ($identifier: String!) {
+                    issues(filter: { identifier: { eq: $identifier } }) {
+                      nodes { identifier url state { name type } }
+                    }
+                  }`,
+                  variables: { identifier },
+                }),
+              });
+              const payload = await response.json();
+              if (!response.ok || payload.errors) {
+                throw new Error(`Linear query failed for ${identifier}: ${JSON.stringify(payload.errors || payload)}`);
+              }
+              return payload.data.issues.nodes[0] || null;
+            }
+
+            function findIdentifier(text) {
+              return text.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0] || null;
+            }
+
+            async function hasMarker(issueNumber, marker) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+              return comments.some((comment) => comment.body?.includes(marker));
+            }
+
+            async function commentOnce(issueNumber, marker, body) {
+              if (await hasMarker(issueNumber, marker)) return;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: `${marker} -->\n${body}`,
+              });
+            }
+
+            await ensureLabel(syncLabel, '1d76db', 'Synchronize this GitHub issue from its linked Linear issue');
+            await ensureLabel(reviewLabel, 'fbca04', 'Linked Linear issue is in review');
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: syncLabel,
+              per_page: 100,
+            });
+
+            for (const issue of issues) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                per_page: 100,
+              });
+              const identifier = findIdentifier(`${issue.title}\n${issue.body || ''}\n${comments.map((comment) => comment.body || '').join('\n')}`);
+              if (!identifier) {
+                core.warning(`#${issue.number}: no Linear identifier found; skipping.`);
+                continue;
+              }
+
+              const linear = await linearIssue(identifier);
+              if (!linear) {
+                core.warning(`#${issue.number}: linked Linear issue ${identifier} was not found; skipping.`);
+                continue;
+              }
+
+              const marker = `${markerPrefix}${identifier}:${linear.state.type}`;
+              if (linear.state.name === 'In Review') {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [reviewLabel],
+                });
+                await commentOnce(issue.number, marker,
+                  `Linked Linear issue [${identifier}](${linear.url}) is **In Review**. This issue remains open until Linear is marked Done.`);
+              } else if (linear.state.type === 'completed') {
+                await commentOnce(issue.number, marker,
+                  `Linked Linear issue [${identifier}](${linear.url}) is **Done**. Closing this GitHub issue automatically.`);
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+              } else {
+                const labels = issue.labels.map((label) => typeof label === 'string' ? label : label.name);
+                if (labels.includes(reviewLabel)) {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: reviewLabel,
+                  });
+                }
+                await commentOnce(issue.number, marker,
+                  `Linked Linear issue [${identifier}](${linear.url}) is **${linear.state.name}**. GitHub review labeling has been cleared.`);
+              }
+            }
