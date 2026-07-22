@@ -28,16 +28,47 @@ GET/HEAD 等只读请求遇到 5xx 或网络错误时默认延迟后重试 1 次
 | 方法 | 路径 | Grok | Gemini | ChatGPT 图片 |
 | --- | --- | --- | --- | --- |
 | GET | `/health` | 网关状态 | 网关与 SDK 状态 | 网关状态 |
-| GET | `/v1/models` | 透传 | 原生转换 | 透传 |
-| POST | `/v1/chat/completions` | 透传 | 支持非流式 | 透传，限图片/上游支持场景 |
-| POST | `/v1/responses` | 透传 | 未实现 | 透传上游有限场景 |
+| GET | `/v1/models` | 透传并用 Cherry 兼容别名替换原始视频模型 | 原生转换 | 透传 |
+| POST | `/v1/chat/completions` | 透传；视频别名自动转换到视频任务 | 支持非流式和 OpenAI SSE 兼容流式 | 透传，限图片/上游支持场景 |
+| POST | `/v1/responses` | 透传；视频别名支持 Responses SSE 转换 | 未实现 | 透传上游有限场景 |
 | POST | `/v1/images/generations` | 透传 | 支持 URL/Base64 | 透传 |
-| POST | `/v1/images/edits` | 透传 | multipart、多图 | 透传 |
+| POST | `/v1/images/edits` | 透传 | multipart/JSON Base64、多图 | 透传 |
 | POST | `/v1/videos` | 映射到上游 generations | 返回异步任务 | 不支持 |
 | GET | `/v1/videos/{id}` | 透传 | 本地任务状态 | 不支持 |
 | GET | `/v1/videos/{id}/content` | 透传（按上游支持） | 下载本地视频 | 不支持 |
 
-Gemini `stream=true` 当前返回 400；客户端应使用非流式模式。Gemini SDK 无法提供可靠 token 计数，`usage` 字段返回 0。
+Grok 的原始视频模型 `grok-imagine-video-1.5` 不会出现在 `/v1/models` 的聊天模型列表中。
+网关会改为返回 Cherry 可直接使用的别名 `grok-imagine-video-1.5-vision`：它接收
+`/v1/chat/completions` 或 `/v1/responses` 请求，取最后一张图片和最新提示词创建真实视频任务，
+并用 SSE 返回进度和带签名的“打开或下载视频”链接。
+
+在 Cherry Studio 中，选择 `Me` 服务商，点击“获取模型列表”后选用
+`grok-imagine-video-1.5-vision`。对话里先放入图片，再输入“让这个女生动起来”即可。
+
+直接调用 API 的客户端仍可使用原始视频端点：
+
+```json
+POST /v1/videos
+{"model":"grok-imagine-video-1.5","prompt":"让这个女生动起来","image":{"url":"data:image/jpeg;base64,<base64>"}}
+```
+
+Gemini SDK 原生不支持流式生成。对于 `stream=true`，网关会先完成一次非流式生成，再以 OpenAI SSE 格式发送兼容事件；客户端可以使用流式接口，但不会在 Gemini 生成期间提前收到 token。Gemini SDK 无法提供可靠 token 计数，`usage` 字段返回 0。
+
+Gemini 图片编辑支持原有的 `multipart/form-data`，也支持 JSON Base64 请求：
+
+```json
+{
+  "model": "gemini-3-pro",
+  "image": "data:image/png;base64,<base64>",
+  "prompt": "保持构图不变，只替换眼镜",
+  "n": 1,
+  "response_format": "url"
+}
+```
+
+如果客户端只能调用聊天接口，可选择网关额外提供的兼容模型 `gemini-3-pro-image`。它会把
+`POST /v1/chat/completions` 转换为图片生成，并以 Markdown 图片链接返回；普通聊天仍使用
+`gemini-3-pro` 等原始模型。
 
 ## 示例
 
@@ -57,7 +88,7 @@ Invoke-RestMethod http://127.0.0.1:8002/v1/chat/completions `
 
 | HTTP | type | 含义 | 是否自动重试 |
 | --- | --- | --- | --- |
-| 400 | `unsupported` | 参数或兼容能力不支持 | 否，修改请求 |
+| 400 | `unsupported` | 参数或兼容能力不支持；原始 Grok 视频模型需用 `POST /v1/videos`，Cherry 聊天需改选 `grok-imagine-video-1.5-vision` | 否，修改请求或模型 |
 | 413 | `request_too_large` | 请求体或上传图片超过上限 | 否，缩小输入 |
 | 401 | — | 密钥缺失、错误、停用或到期 | 否，联系管理员 |
 | 404 | — | 任务或媒体不存在 | 否 |
