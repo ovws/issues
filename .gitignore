@@ -18,7 +18,5 @@ logs/*
 !logs/.gitkeep
 run/*
 !run/.gitkeep
-upstream/*
-!upstream/README.md
 dist/
 build/

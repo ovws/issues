@@ -29,7 +29,6 @@ Copy-Item .env.example .env
 可选参数：
 
 ```powershell
-.\scripts\install.ps1 -UpdateUpstreams
 .\scripts\install.ps1 -SkipGrokBuild
 .\scripts\install.ps1 -SkipChatGPTFrontend
 ```

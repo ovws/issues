@@ -1,5 +1,4 @@
 param(
-    [switch]$UpdateUpstreams,
     [switch]$SkipGrokBuild,
     [switch]$SkipChatGPTFrontend
 )
@@ -22,23 +21,14 @@ $manifestPath = Join-Path $script:ProjectRoot 'config\upstreams.json'
 $repositories = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
 foreach ($repository in $repositories) {
     $path = Join-Path $script:ProjectRoot $repository.path
-    if (-not (Test-Path -LiteralPath (Join-Path $path '.git'))) {
-        git clone --depth 1 --no-checkout $repository.url $path
-        if ($LASTEXITCODE -ne 0) { throw "Failed to clone $($repository.url)" }
-        git -c "safe.directory=$($path.Replace('\','/'))" -C $path fetch --depth 1 origin $repository.commit
-        if ($LASTEXITCODE -ne 0) { throw "Failed to fetch pinned commit for $($repository.name)" }
-        git -c "safe.directory=$($path.Replace('\','/'))" -C $path checkout --detach $repository.commit
-        if ($LASTEXITCODE -ne 0) { throw "Failed to check out pinned commit for $($repository.name)" }
-    } elseif ($UpdateUpstreams) {
-        git -c "safe.directory=$($path.Replace('\','/'))" -C $path checkout main
-        if ($LASTEXITCODE -ne 0) { throw "Failed to select main branch in $path" }
-        git -c "safe.directory=$($path.Replace('\','/'))" -C $path pull --ff-only
-        if ($LASTEXITCODE -ne 0) { throw "Failed to update $path" }
-    } else {
-        $current = git -c "safe.directory=$($path.Replace('\','/'))" -C $path rev-parse HEAD
-        if ($current -ne $repository.commit) {
-            Write-Warning "$($repository.name) is at $current, expected pinned $($repository.commit)."
-        }
+    if (-not $repository.vendored) {
+        throw "$($repository.name) is not marked as vendored in config\upstreams.json."
+    }
+    if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+        throw "Vendored source is missing: $($repository.path). Restore it from this repository."
+    }
+    if (Test-Path -LiteralPath (Join-Path $path '.git')) {
+        throw "Unexpected nested Git metadata in vendored source: $($repository.path)\.git"
     }
 }
 

@@ -10,7 +10,7 @@
 
 上游管理页面与凭据只在本机环回地址上可用。局域网端口由本项目网关占用，统一实施每平台 FIFO 单并发队列、独立 SQLite 任务状态、超时保护和日志脱敏。本机管理台位于 `http://127.0.0.1:8090`：Grok/ChatGPT 密钥直接写入上游原生后台并由上游鉴权，Gemini 因没有原生 Key 系统而使用网关密钥。
 
-部署脚本默认从 `ovws/internal-ai-grok2api`、`ovws/internal-ai-gemini-api`、`ovws/internal-ai-chatgpt2api` 三个私有镜像拉取固定 commit；原始开源上游地址保留在 `config/upstreams.json` 的 `upstream` 字段中用于审计。
+三个上游项目的完整源码已直接纳入本仓库的 `upstream/` 目录。一次克隆即可获得网关、部署脚本和三套上游源码，不再需要访问或分别克隆三个私有镜像；导入版本、原私有镜像和开源上游地址保留在 `config/upstreams.json` 中用于审计。
 
 ## 快速开始
 
@@ -83,7 +83,7 @@ run/                    受管进程 PID 记录（不提交）
 scripts/                安装、启停、健康检查、防火墙、自启动、密钥管理
 src/internal_ai_api/    共享基础层和三个服务入口
 tests/                  鉴权、持久化、FIFO、超时、脱敏与清理测试
-upstream/               三个独立上游 Git 仓库（根项目忽略）
+upstream/               纳入本仓库管理的三套上游完整源码
 ```
 
 ## 安全与适用范围
