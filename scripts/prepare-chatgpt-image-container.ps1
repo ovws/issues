@@ -1,6 +1,5 @@
 param(
     [string]$PublicBaseUrl = 'http://chatgpt-image.internal',
-    [switch]$RefreshPinnedCommit,
     [switch]$ForceLocalConfig
 )
 
@@ -22,25 +21,14 @@ $repository = $repositories |
 if (-not $repository) { throw 'chatgpt2api is missing from config\upstreams.json.' }
 
 $path = Join-Path $script:ProjectRoot $repository.path
-$safePath = $path.Replace('\', '/')
-if (-not (Test-Path -LiteralPath (Join-Path $path '.git'))) {
-    git clone --no-checkout $repository.url $path
-    if ($LASTEXITCODE -ne 0) { throw "Failed to clone $($repository.url)." }
+if (-not $repository.vendored) {
+    throw 'chatgpt2api is not marked as vendored in config\upstreams.json.'
 }
-
-$dirty = git -c "safe.directory=$safePath" -C $path status --porcelain
-if ($dirty) { throw "Refusing to change a dirty ChatGPT2API checkout: $path" }
-
-git -c "safe.directory=$safePath" -C $path cat-file -e "$($repository.commit)^{commit}" 2>$null
-if ($LASTEXITCODE -ne 0 -or $RefreshPinnedCommit) {
-    git -c "safe.directory=$safePath" -C $path fetch --depth 1 origin $repository.commit
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the pinned ChatGPT2API commit.' }
+if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+    throw "Vendored ChatGPT2API source is missing: $path"
 }
-
-$current = git -c "safe.directory=$safePath" -C $path rev-parse HEAD
-if ($current -ne $repository.commit) {
-    git -c "safe.directory=$safePath" -C $path checkout --detach $repository.commit
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to check out the pinned ChatGPT2API commit.' }
+if (Test-Path -LiteralPath (Join-Path $path '.git')) {
+    throw "Unexpected nested Git metadata in vendored ChatGPT2API source: $path\.git"
 }
 
 $upstreamEnv = Join-Path $script:ProjectRoot 'config\chatgpt2api.local.env'
@@ -83,6 +71,6 @@ $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (
 $config.base_url = $PublicBaseUrl.TrimEnd('/')
 $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $localConfig -Encoding UTF8
 
-Write-Host "ChatGPT2API source is pinned at $($repository.commit)."
+Write-Host "Using vendored ChatGPT2API source from revision $($repository.commit)."
 Write-Host 'Created three local credential/config files without printing the master key.'
 Write-Host 'Run scripts\protect-local-data.ps1, then docker compose -f compose.chatgpt-image.yml up -d --build.'

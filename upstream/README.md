@@ -1,9 +1,9 @@
 # Upstream projects
 
-This directory is intentionally excluded from the root repository. The installer clones private mirrors from the `ovws` GitHub account:
+The three upstream projects are vendored directly into this repository so a single clone contains everything required to install and build the services:
 
-- `ovws/internal-ai-grok2api` to `upstream/grok2api` (upstream: `chenyme/grok2api`)
-- `ovws/internal-ai-gemini-api` to `upstream/gemini-api` (upstream: `HanaokaYuzu/Gemini-API`)
-- `ovws/internal-ai-chatgpt2api` to `upstream/chatgpt2api` (upstream: `basketikun/chatgpt2api`)
+- `upstream/grok2api` (source: `chenyme/grok2api`)
+- `upstream/gemini-api` (source: `HanaokaYuzu/Gemini-API`)
+- `upstream/chatgpt2api` (source: `basketikun/chatgpt2api`)
 
-Each directory keeps its own Git metadata. Run `scripts/install.ps1` to clone or update them.
+The imported source revisions and former private-mirror URLs are recorded in `config/upstreams.json` for auditing. These directories intentionally contain no nested `.git` metadata; changes are reviewed and committed through the root repository.
