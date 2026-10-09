@@ -1,97 +1,18 @@
-# 公司内网 AI OpenAI 兼容 API
+# `ovws/issues`：GitHub Issues 与 Linear 同步备份
 
-本项目对应 Linear `WK-80`，用于在一台公司 Windows 电脑上以本地原生进程运行三套相互独立的 AI 服务：
+本仓库现专门保留 GitHub Issues、评论及 Linear 状态同步工作流。项目源码已迁移到 [ovws/internal-ai](https://github.com/ovws/internal-ai)（私有仓库，默认分支为 `master`）。
 
-| 平台 | 局域网 Base URL | 本地上游 | 主要能力 |
-| --- | --- | --- | --- |
-| Grok | `http://<内网IP>:8001/v1` | `127.0.0.1:18001` | 文本、图片、编辑、视频 |
-| Gemini | `http://<内网IP>:8002/v1` | 本进程内 `Gemini-API` SDK | 文本、图片、编辑、视频 |
-| ChatGPT 图片 | `http://<内网IP>:8003/v1` | `127.0.0.1:18003` | 图片生成、多图编辑、有限文本场景 |
+## 本仓库保留内容
 
-上游管理页面与凭据只在本机环回地址上可用。局域网端口由本项目网关占用，统一实施每平台 FIFO 单并发队列、独立 SQLite 任务状态、超时保护和日志脱敏。本机管理台位于 `http://127.0.0.1:8090`：Grok/ChatGPT 密钥直接写入上游原生后台并由上游鉴权，Gemini 因没有原生 Key 系统而使用网关密钥。
+- GitHub Issues 与评论：属于 GitHub 的 Issue 数据，不是 Git 文件。本次仅清理代码文件，没有删除或修改 Issue、评论、标签或状态。
+- `.github/workflows/linear-issue-sync.yml`：每小时同步带 `linear-sync` 标签的 Issue，也支持手动运行。
+- `docs/LINEAR-GITHUB-SYNC.md`：Linear 同步规则与配置说明。
+- 本文件：仓库用途与备份说明。
 
-三个上游项目的完整源码已直接纳入本仓库的 `upstream/` 目录。一次克隆即可获得网关、部署脚本和三套上游源码，不再需要访问或分别克隆三个私有镜像；导入版本、原私有镜像和开源上游地址保留在 `config/upstreams.json` 中用于审计。
+## 保持同步正常运行
 
-## 快速开始
+不要删除或停用同步工作流；继续保留仓库 Actions secret `LINEAR_API_KEY`，并保持 GitHub Issues 功能启用。工作流只处理本仓库里带 `linear-sync` 标签的打开 Issue。
 
-需要 Windows 10/11、PowerShell 5.1+、Git、`uv`、Python 3.13、Node.js/pnpm，以及 Grok 当前版本要求的 Go 1.26。所有项目文件、虚拟环境、上游源码、数据和日志均位于本项目目录内。
+## 源码回溯
 
-```powershell
-Copy-Item .env.example .env
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
-```
-
-随后完成以下本机配置：
-
-1. 编辑 `.env`，设置 Grok 与 ChatGPT2API 的本地上游密钥。
-2. 将 `config/gemini-cookies.example.json` 复制为 `config/gemini-cookies.local.json`，只在本机填写 Gemini Cookie。
-3. 编辑 `upstream/grok2api/config.yaml`，替换所有标记为“必须修改”的管理员和加密密钥。
-4. 分别在 Grok、ChatGPT2API 本地管理端导入获准使用的账号凭据。
-5. 启动服务，在服务器本机打开 `http://127.0.0.1:8090`，为同事生成各平台独立密钥。Grok 和 ChatGPT 会写入真实上游；Gemini 写入网关数据库。CLI 仅保留给 Gemini 应急管理：
-
-```powershell
-.\.venv\Scripts\python.exe .\scripts\generate-api-key.py --platform gemini create --owner "张三" --department "设计部"
-```
-
-明文密钥只显示一次。Gemini SQLite 只保存盐和 PBKDF2 哈希；Grok/ChatGPT 的 Key 元数据和哈希由各自上游保存。
-
-完成三套服务的本地安装和凭据配置后，服务器管理员可直接双击根目录的 `start-ai-api.bat`。脚本以 Windows 本地进程启动 Grok、Gemini、ChatGPT Image 以及仅监听本机的 8090 管理工具，不需要 Docker；它会逐项检查配置、运行环境、目录、端口和健康状态。某个平台失败时仍会继续处理其他平台，最终以非零退出码汇总失败。
-
-```powershell
-Copy-Item .\config\gemini-cookies.example.json .\config\gemini-cookies.local.json
-$env:AI_API_NO_PAUSE = '1'
-.\start-ai-api.bat
-```
-
-命令行自动化可设置 `AI_API_NO_PAUSE=1` 禁止暂停，也可传入 `-PreflightOnly` 只做检查。默认每个平台最多等待 120 秒；可用 `-StartupTimeoutSeconds 180` 调整。若 BAT 位于独立 Git worktree，脚本会自动定位包含本地 `.env` 和 `.venv` 的主工作树；也可用 `-RuntimeRoot D:\WEB2API` 或 `AI_API_RUNTIME_ROOT` 明确指定实际部署目录。若某个上游没有公开 `/health`，可仅在当前进程中通过 `AI_API_GROK_HEALTH_KEY`、`AI_API_GEMINI_HEALTH_KEY` 或 `AI_API_CHATGPT_IMAGE_HEALTH_KEY` 提供对应个人密钥，让脚本回退检查 `/v1/models`；脚本不会打印这些值。
-
-原有纯本地进程方式仍保留：
-
-```powershell
-.\scripts\start-all.ps1
-.\scripts\status.ps1
-.\scripts\health-check.ps1
-```
-
-单独管理服务：
-
-```powershell
-.\scripts\start-service.ps1 -Service gemini
-.\scripts\stop-service.ps1 -Service gemini
-.\scripts\restart-all.ps1 -Service gemini
-```
-
-## 客户端配置
-
-```text
-Provider: OpenAI Compatible
-Base URL: http://<本机内网IP>:8001/v1
-API Key: <从 8090 为该平台创建的个人密钥>
-Model: 通过 GET /v1/models 获取
-```
-
-Gemini 和 ChatGPT 图片只需改为端口 `8002`、`8003`，并使用对应平台的个人密钥。
-
-## 目录
-
-```text
-config/                 本地凭据模板与上游配置说明
-data/                   网关 SQLite 与 Gemini 媒体（不提交）
-docs/                   部署、安全、接口、运维和验收文档
-logs/                   每个平台独立日志（不提交）
-run/                    受管进程 PID 记录（不提交）
-scripts/                安装、启停、健康检查、防火墙、自启动、密钥管理
-src/internal_ai_api/    共享基础层和三个服务入口
-tests/                  鉴权、持久化、FIFO、超时、脱敏与清理测试
-upstream/               纳入本仓库管理的三套上游完整源码
-```
-
-## 安全与适用范围
-
-- 仅供经公司授权的局域网低并发使用，不开放公网，不提供规避验证码、风控或账号限制的功能。
-- `.env`、Cookie、本地数据库、日志、媒体和上游检出目录不会进入根 Git 仓库。
-- `scripts/configure-firewall.ps1 -LanCidr <公司网段>` 只接受 RFC1918 网段；需管理员自行执行。
-- 上游均属于非官方网页接口实现，可能随登录态、网页接口或服务条款变化失效。
-- ChatGPT2API 当前 README 明确限制商业、批量、盈利和规模化用途。公司内部使用前必须由法务/信息安全确认许可和 OpenAI 服务条款；未确认前不得上线。
-
-详见 [部署说明](docs/DEPLOYMENT.md)、[三平台本机管理台](docs/ADMIN-CONSOLE.md)、[API 与错误码](docs/API.md)、[运维恢复](docs/OPERATIONS.md)、[安全与上游风险](docs/SECURITY.md) 和 [现场验收清单](docs/ACCEPTANCE.md)。
+当前 `main` 仅保留 Issues、同步工作流和备份说明。清理前的项目源码仍可从本仓库 Git 历史回溯；正式迁移版本可在 `ovws/internal-ai` 主分支的迁移提交中查看。
